@@ -5,11 +5,8 @@ Main entry point for the PyQt6 data platform application
 """
 
 import sys
-import os
-from pathlib import Path
-from PyQt6.QtWidgets import QApplication, QStyleFactory
-from PyQt6.QtCore import QDir
-from PyQt6.QtGui import QIcon
+
+from PyQt6.QtWidgets import QApplication
 
 from ui.main_window import MainWindow
 from config.config_manager import ConfigManager

@@ -5,10 +5,9 @@ Main search interface with vector search, document viewer, and SQL query tabs
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTabWidget, QTextEdit,
-    QLabel, QPushButton, QSplitter, QFrame, QScrollArea,
-    QListWidget, QListWidgetItem, QComboBox, QCheckBox
+    QLabel, QPushButton, QFrame, QComboBox, QCheckBox
 )
-from PyQt6.QtCore import Qt, pyqtSignal, QThread
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QFont, QSyntaxHighlighter, QTextCharFormat, QColor
 import logging
 

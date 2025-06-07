@@ -5,11 +5,10 @@ Displays search results in Google-like format with summaries
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QScrollArea, 
-    QFrame, QPushButton, QProgressBar, QTextEdit, QSplitter,
-    QListWidget, QListWidgetItem, QMenu, QMessageBox
+    QFrame, QPushButton, QProgressBar
 )
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer, QUrl
-from PyQt6.QtGui import QFont, QPixmap, QIcon, QDesktopServices, QCursor
+from PyQt6.QtCore import Qt, QThread, pyqtSignal
+from PyQt6.QtGui import QFont, QCursor
 import logging
 from typing import List, Dict, Any
 from datetime import datetime

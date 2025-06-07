@@ -5,13 +5,12 @@ Provides the primary interface with sections, search, and file management
 
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QSplitter, 
-    QLineEdit, QPushButton, QLabel, QFrame, QMenuBar, QStatusBar,
-    QTreeWidget, QTreeWidgetItem, QScrollArea, QTabWidget, QDialog
+    QLabel, QFrame, QStatusBar,
+    QTreeWidget, QTreeWidgetItem, QTabWidget
 )
-from PyQt6.QtCore import Qt, pyqtSignal, QTimer
-from PyQt6.QtGui import QFont, QPixmap, QIcon, QAction
+from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QFont, QAction
 
-from ui.sections.search_section import SearchSection
 from ui.sections.file_browser import FileBrowser
 from ui.sections.dataset_browser import DatasetBrowser
 from ui.widgets.search_bar import SearchBar

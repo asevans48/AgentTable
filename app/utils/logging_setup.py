@@ -5,7 +5,6 @@ Configures application logging with proper formatting and file rotation
 
 import logging
 import logging.handlers
-import os
 from pathlib import Path
 from datetime import datetime
 

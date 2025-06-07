@@ -5,12 +5,12 @@ Shows registered datasets with filtering and access information
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, 
-    QListWidget, QListWidgetItem, QComboBox, QLineEdit, QFrame,
-    QMenu, QMessageBox, QDialog, QTextEdit, QFormLayout, QCheckBox
+    QComboBox, QLineEdit, QFrame,
+    QMessageBox, QDialog, QTextEdit, QFormLayout
 )
-from PyQt6.QtCore import Qt, pyqtSignal, QTimer
-from PyQt6.QtGui import QFont, QIcon, QAction, QPixmap
-from typing import List, Dict, Any, Optional
+from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtGui import QFont
+from typing import List, Dict, Any
 import logging
 
 logger = logging.getLogger(__name__)

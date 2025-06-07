@@ -9,13 +9,12 @@ from typing import List, Dict, Any, Optional
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTreeView, QLabel, 
     QPushButton, QLineEdit, QComboBox, QMenu, QMessageBox,
-    QFileDialog, QFrame, QSplitter, QTextEdit, QProgressBar
+    QFileDialog, QFrame, QProgressBar
 )
 from PyQt6.QtCore import (
-    Qt, pyqtSignal, QFileSystemModel, QModelIndex, QThread,
-    QTimer, QStandardItemModel, QStandardItem
+    Qt, pyqtSignal, QModelIndex, QThread,
 )
-from PyQt6.QtGui import QFont, QIcon, QAction, QPixmap, QStandardItemModel
+from PyQt6.QtGui import QFont, QAction, QStandardItemModel, QStandardItem
 
 import logging
 

@@ -5,10 +5,10 @@ Prominent search interface for vector search and AI chat
 
 from PyQt6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QLineEdit, QPushButton, 
-    QComboBox, QLabel, QFrame, QToolButton, QMenu, QAction
+    QComboBox, QLabel, QFrame, QToolButton, QMenu
 )
-from PyQt6.QtCore import Qt, pyqtSignal, QTimer
-from PyQt6.QtGui import QFont, QIcon, QKeySequence, QShortcut
+from PyQt6.QtCore import pyqtSignal
+from PyQt6.QtGui import QFont, QKeySequence, QShortcut, QAction
 import logging
 
 logger = logging.getLogger(__name__)
