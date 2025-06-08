@@ -28,6 +28,7 @@ class MainWindow(QMainWindow):
         
         self.setWindowTitle("Data Platform - Vector Search & File Management")
         self.setMinimumSize(1200, 800)
+        self.showMaximized()
         
         self.setup_ui()
         self.setup_menu_bar()
