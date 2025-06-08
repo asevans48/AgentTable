@@ -90,15 +90,15 @@ class MainWindow(QMainWindow):
             }
         """)
         header_layout = QVBoxLayout(header_frame)
-        header_layout.setContentsMargins(16, 20, 16, 20)
-        header_layout.setSpacing(8)
+        header_layout.setContentsMargins(16, 16, 16, 16)
+        header_layout.setSpacing(2)
         
         # App title with modern typography
         app_title = QLabel("Data Platform")
         app_title.setFont(QFont("Segoe UI", 16, QFont.Weight.Bold))
         app_title.setStyleSheet("""
             color: #ffffff;
-            margin-bottom: 0px;
+            margin: 0px;
             letter-spacing: 0.5px;
         """)
         header_layout.addWidget(app_title)
@@ -108,7 +108,7 @@ class MainWindow(QMainWindow):
         subtitle.setFont(QFont("Segoe UI", 10, QFont.Weight.Normal))
         subtitle.setStyleSheet("""
             color: #bdc3c7;
-            margin-top: 0px;
+            margin: 0px;
             font-weight: 400;
         """)
         header_layout.addWidget(subtitle)
