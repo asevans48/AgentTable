@@ -14,26 +14,34 @@ from utils.logging_setup import setup_logging
 
 def main():
     """Main application entry point"""
-    app = QApplication(sys.argv)
-    
-    # Setup application properties
-    app.setApplicationName("Data Platform")
-    app.setApplicationVersion("1.0.0")
-    app.setOrganizationName("DataPlatform")
-    app.setOrganizationDomain("dataplatform.local")
-    
     # Setup logging
     setup_logging()
     
-    # Initialize configuration manager
-    config_manager = ConfigManager()
+    # Create application
+    app = QApplication(sys.argv)
     
-    # Create and show main window
+    # Set application metadata
+    app.setApplicationName("Data Platform")
+    app.setApplicationDisplayName("Data Platform")
+    app.setApplicationVersion("1.0.0")
+    
+    # Windows-specific: Set App User Model ID EARLY
+    try:
+        import ctypes
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID('dataplatform.main.1.0')
+    except:
+        pass
+    
+    # Create config manager and main window
+    config_manager = ConfigManager()
     main_window = MainWindow(config_manager)
+    
+    # Show the main window
     main_window.show()
     
-    # Start the application
+    # Run the application
     sys.exit(app.exec())
+
 
 if __name__ == "__main__":
     main()

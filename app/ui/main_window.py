@@ -5,11 +5,11 @@ Provides the primary interface with sections, search, and file management
 
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QSplitter, 
-    QLabel, QFrame, QStatusBar,
-    QTreeWidget, QTreeWidgetItem, QTabWidget
+    QLabel, QFrame, QStatusBar, QSystemTrayIcon, QMenu,
+    QTreeWidget, QTreeWidgetItem, QTabWidget, QApplication
 )
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QFont, QAction
+from PyQt6.QtGui import QFont, QAction, QPixmap, QPainter, QPen, QColor, QIcon
 
 from ui.sections.file_browser import FileBrowser
 from ui.sections.dataset_browser import DatasetBrowser
@@ -28,13 +28,161 @@ class MainWindow(QMainWindow):
         
         self.setWindowTitle("Data Platform - Vector Search & File Management")
         self.setMinimumSize(1200, 800)
+        
+        # Create and set the icon early
+        self.app_icon = self.create_app_icon()
+        self.setWindowIcon(self.app_icon)
+        
+        # Also set it at the application level
+        app = QApplication.instance()
+        if app:
+            app.setWindowIcon(self.app_icon)
+        
         self.showMaximized()
         
         self.setup_ui()
         self.setup_menu_bar()
         self.setup_status_bar()
         self.setup_connections()
+        self.setup_system_tray()
+
+    def show_normal(self):
+        """Show and raise the main window"""
+        self.show()
+        self.raise_()
+        self.activateWindow()
+    
+    def focus_search(self):
+        """Show window and focus on search bar"""
+        self.show_normal()
+        if hasattr(self.search_bar, 'focus_search'):
+            self.search_bar.focus_search()
+        else:
+            # Fallback: focus the search input directly
+            if hasattr(self.search_bar, 'search_input'):
+                self.search_bar.search_input.setFocus()
+                self.search_bar.search_input.selectAll()
+            
+    def on_tray_activated(self, reason):
+        """Handle system tray icon activation"""
+        if reason == QSystemTrayIcon.ActivationReason.DoubleClick:
+            if self.isVisible():
+                self.hide()
+            else:
+                self.show_normal()
+        elif reason == QSystemTrayIcon.ActivationReason.Trigger:
+            # Single click - just show if hidden
+            if not self.isVisible():
+                self.show_normal()
+
+    def exit_completely(self):
+        """Exit the application completely"""
+        if hasattr(self, 'tray_icon'):
+            self.tray_icon.hide()
+        self.close()
         
+    def closeEvent(self, event):
+        """Handle close event - normal close behavior"""
+        # Clean up system tray icon
+        if hasattr(self, 'tray_icon'):
+            self.tray_icon.hide()
+        
+        # Accept the close event (actually close the app)
+        event.accept()
+
+    def setup_system_tray(self):
+        """Setup system tray icon"""
+        if not QSystemTrayIcon.isSystemTrayAvailable():
+            return
+            
+        # Create a custom icon for the system tray
+        self.tray_icon = QSystemTrayIcon(self)
+        
+        # Create custom icon
+        icon = self.create_app_icon()
+        self.tray_icon.setIcon(icon)
+        self.setWindowIcon(icon)  # Also set as window icon
+        
+        # Create tray menu
+        tray_menu = QMenu()
+        
+        # Show/Hide action
+        show_action = QAction("Show Data Platform", self)
+        show_action.triggered.connect(self.show_normal)
+        tray_menu.addAction(show_action)
+        
+        hide_action = QAction("Hide to Tray", self)
+        hide_action.triggered.connect(self.hide)
+        tray_menu.addAction(hide_action)
+        
+        tray_menu.addSeparator()
+        
+        # Quick actions
+        search_action = QAction("🔍 Quick Search", self)
+        search_action.triggered.connect(self.focus_search)
+        tray_menu.addAction(search_action)
+        
+        settings_action = QAction("⚙️ Settings", self)
+        settings_action.triggered.connect(self.show_settings)
+        tray_menu.addAction(settings_action)
+        
+        tray_menu.addSeparator()
+        
+        # Exit action
+        exit_action = QAction("Exit", self)
+        exit_action.triggered.connect(self.close)
+        tray_menu.addAction(exit_action)
+        
+        self.tray_icon.setContextMenu(tray_menu)
+        self.tray_icon.setToolTip("Data Platform - Vector Search & File Management")
+        
+        # Handle tray icon activation
+        self.tray_icon.activated.connect(self.on_tray_activated)
+        
+        # Show the tray icon
+        self.tray_icon.show()
+
+    def create_app_icon(self):
+        """Create a custom application icon with multiple sizes for better Windows support"""
+        icon = QIcon()
+        
+        # Create multiple sizes for better Windows integration
+        for size in [16, 24, 32, 48, 64]:
+            pixmap = QPixmap(size, size)
+            pixmap.fill(Qt.GlobalColor.transparent)
+            
+            painter = QPainter(pixmap)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            
+            # Scale the design based on size
+            margin = max(2, size // 16)
+            circle_size = size - (margin * 2)
+            
+            # Draw background circle
+            painter.setBrush(QColor(45, 123, 251))
+            painter.setPen(QPen(QColor(25, 89, 181), max(1, size // 16)))
+            painter.drawEllipse(margin, margin, circle_size, circle_size)
+            
+            # Draw database symbol - scale with icon size
+            painter.setBrush(Qt.GlobalColor.white)
+            painter.setPen(QPen(Qt.GlobalColor.white, 1))
+            
+            # Calculate proportional dimensions
+            db_width = size // 2
+            db_height = size // 8
+            db_x = (size - db_width) // 2
+            
+            # Three database layers
+            for i in range(3):
+                y_pos = margin + (size // 6) + (i * (size // 6))
+                painter.drawEllipse(db_x, y_pos, db_width, db_height)
+                painter.drawRect(db_x, y_pos + db_height//2, db_width, db_height//2)
+            
+            painter.end()
+            icon.addPixmap(pixmap)
+        
+        return icon
+            
     def setup_ui(self):
         """Setup the main user interface"""
         central_widget = QWidget()
@@ -214,13 +362,13 @@ class MainWindow(QMainWindow):
         # Tab widget for different views
         tab_widget = QTabWidget()
         
-        # File browser tab
-        self.file_browser = FileBrowser(self.config_manager)
-        tab_widget.addTab(self.file_browser, "Files")
-        
         # Dataset browser tab
         self.dataset_browser = DatasetBrowser(self.config_manager)
         tab_widget.addTab(self.dataset_browser, "Datasets")
+
+        # File browser tab
+        self.file_browser = FileBrowser(self.config_manager)
+        tab_widget.addTab(self.file_browser, "Files")
         
         layout.addWidget(tab_widget)
         
@@ -346,7 +494,8 @@ class MainWindow(QMainWindow):
         dialog = FilterDialog(self)
         if dialog.exec():
             filters = dialog.get_filters()
-            self.dataset_browser.apply_filters(filters)
+            # Fixed method call
+            self.dataset_browser.apply_dataset_filters(filters)
             
     def new_application(self):
         """Create new application configuration"""

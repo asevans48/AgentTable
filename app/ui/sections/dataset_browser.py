@@ -376,6 +376,11 @@ class DatasetBrowser(QWidget):
         
         self.all_datasets = registered + mock_datasets
         self.apply_filters()
+    
+    def apply_dataset_filters(self, filters: Dict[str, Any]):
+        """Apply filters to the dataset list"""
+        self.current_filters = filters
+        self.apply_filters()
         
     def apply_filters(self):
         """Apply current filters to dataset list"""
@@ -383,21 +388,33 @@ class DatasetBrowser(QWidget):
         type_filter = self.type_filter.currentText()
         access_filter = self.access_filter.currentText()
         
+        # Get additional filters from filter dialog
+        name_filter = self.current_filters.get('name_contains', '').lower()
+        owner_filter = self.current_filters.get('owner_contains', '').lower()
+        allowed_types = self.current_filters.get('types', [])
+        allowed_access = self.current_filters.get('access_levels', [])
+        include_tags = self.current_filters.get('include_tags', [])
+        exclude_tags = self.current_filters.get('exclude_tags', [])
+        min_quality = self.current_filters.get('min_quality_score', 0)
+        supports_chat = self.current_filters.get('supports_chat', None)
+        has_embeddings = self.current_filters.get('has_embeddings', None)
+        has_documentation = self.current_filters.get('has_documentation', None)
+        
         self.filtered_datasets = []
         
         for dataset in self.all_datasets:
-            # Text search
+            # Text search (existing)
             if search_text:
                 searchable_text = f"{dataset.get('name', '')} {dataset.get('description', '')} {dataset.get('owner', '')}".lower()
                 if search_text not in searchable_text:
                     continue
                     
-            # Type filter
+            # Type filter (existing)
             if type_filter != "All Types":
                 if dataset.get('type', '') != type_filter:
                     continue
                     
-            # Access filter
+            # Access filter (existing)
             if access_filter != "All Access":
                 access_level = dataset.get('access_level', '')
                 if access_filter == "Full Access" and access_level != "Full":
@@ -406,11 +423,57 @@ class DatasetBrowser(QWidget):
                     continue
                 elif access_filter == "No Access" and access_level != "No Access":
                     continue
+            
+            # Advanced filters from filter dialog
+            
+            # Name filter
+            if name_filter and name_filter not in dataset.get('name', '').lower():
+                continue
+                
+            # Owner filter
+            if owner_filter and owner_filter not in dataset.get('owner', '').lower():
+                continue
+                
+            # Dataset type filter (from advanced dialog)
+            if allowed_types and dataset.get('type', '') not in allowed_types:
+                continue
+                
+            # Access level filter (from advanced dialog)
+            if allowed_access and dataset.get('access_level', '') not in allowed_access:
+                continue
+                
+            # Tag filters
+            dataset_tags = dataset.get('tags', [])
+            if include_tags:
+                if not any(tag in dataset_tags for tag in include_tags):
+                    continue
+                    
+            if exclude_tags:
+                if any(tag in dataset_tags for tag in exclude_tags):
+                    continue
+                    
+            # Quality filter
+            dataset_quality = dataset.get('quality_score', 0)
+            if dataset_quality < min_quality:
+                continue
+                
+            # AI capabilities filters
+            if supports_chat is not None:
+                if dataset.get('supports_chat', False) != supports_chat:
+                    continue
+                    
+            if has_embeddings is not None:
+                if dataset.get('has_embeddings', False) != has_embeddings:
+                    continue
+                    
+            if has_documentation is not None:
+                if dataset.get('has_documentation', False) != has_documentation:
+                    continue
                     
             self.filtered_datasets.append(dataset)
             
         self.display_datasets()
-        
+
     def display_datasets(self):
         """Display filtered datasets"""
         # Clear existing items
