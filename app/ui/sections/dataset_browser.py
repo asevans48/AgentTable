@@ -34,9 +34,10 @@ class DatasetItem(QFrame):
             QFrame {
                 background-color: white;
                 border: 1px solid #e0e0e0;
-                border-radius: 6px;
-                margin: 2px;
-                padding: 8px;
+                border-radius: 4px;
+                margin: 1px;
+                padding: 4px;
+                max-height: 80px;
             }
             QFrame:hover {
                 border-color: #1a73e8;
@@ -45,8 +46,8 @@ class DatasetItem(QFrame):
         """)
         
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(4)
+        layout.setContentsMargins(6, 6, 6, 6)
+        layout.setSpacing(3)
         
         # Header with name and type
         header_layout = QHBoxLayout()
@@ -76,15 +77,7 @@ class DatasetItem(QFrame):
         
         layout.addLayout(header_layout)
         
-        # Description
-        description = self.dataset_info.get('description', 'No description available')
-        desc_label = QLabel(description)
-        desc_label.setWordWrap(True)
-        desc_label.setStyleSheet("color: #555; font-size: 9pt; line-height: 1.3;")
-        desc_label.setMaximumHeight(40)  # Limit height
-        layout.addWidget(desc_label)
-        
-        # Metadata row
+        # Compact metadata row
         metadata_layout = QHBoxLayout()
         
         # Owner
@@ -95,19 +88,18 @@ class DatasetItem(QFrame):
         
         metadata_layout.addStretch()
         
-        # Row count (if available)
+        # Row count (if available) - more compact
         row_count = self.dataset_info.get('row_count')
         if row_count is not None:
-            count_label = QLabel(f"📊 {row_count:,} rows")
+            if row_count >= 1000000:
+                count_str = f"{row_count // 1000000}M"
+            elif row_count >= 1000:
+                count_str = f"{row_count // 1000}K"
+            else:
+                count_str = str(row_count)
+            count_label = QLabel(f"📊 {count_str}")
             count_label.setStyleSheet("color: #666; font-size: 8pt;")
             metadata_layout.addWidget(count_label)
-        
-        # Last updated
-        last_updated = self.dataset_info.get('last_updated', '')
-        if last_updated:
-            updated_label = QLabel(f"🕒 {last_updated}")
-            updated_label.setStyleSheet("color: #666; font-size: 8pt;")
-            metadata_layout.addWidget(updated_label)
             
         layout.addLayout(metadata_layout)
         
