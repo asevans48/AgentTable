@@ -91,9 +91,9 @@ class MainWindow(QMainWindow):
         """)
         header_layout = QVBoxLayout(header_frame)
         header_layout.setContentsMargins(16, 16, 16, 16)
-        header_layout.setSpacing(2)
+        header_layout.setSpacing(0)
         
-        # App title with modern typography
+        # App title with modern typography - centered
         app_title = QLabel("Data Platform")
         app_title.setFont(QFont("Segoe UI", 16, QFont.Weight.Bold))
         app_title.setStyleSheet("""
@@ -101,17 +101,8 @@ class MainWindow(QMainWindow):
             margin: 0px;
             letter-spacing: 0.5px;
         """)
+        app_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         header_layout.addWidget(app_title)
-        
-        # Subtitle with clean styling
-        subtitle = QLabel("Navigate & Explore")
-        subtitle.setFont(QFont("Segoe UI", 10, QFont.Weight.Normal))
-        subtitle.setStyleSheet("""
-            color: #bdc3c7;
-            margin: 0px;
-            font-weight: 400;
-        """)
-        header_layout.addWidget(subtitle)
         
         layout.addWidget(header_frame)
         
