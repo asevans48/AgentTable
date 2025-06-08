@@ -5,13 +5,12 @@ Displays search results in Google-like format with summaries
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QScrollArea, 
-    QFrame, QPushButton, QProgressBar
+    QFrame, QPushButton, QProgressBar, QComboBox
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtGui import QFont, QCursor
 import logging
 from typing import List, Dict, Any
-from datetime import datetime
 
 logger = logging.getLogger(__name__)
 

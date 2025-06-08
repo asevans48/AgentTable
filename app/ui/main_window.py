@@ -229,8 +229,9 @@ class MainWindow(QMainWindow):
     def populate_sections_tree(self):
         """Populate the sections tree with available sections"""
         sections_data = [
-            ("🔍 Search", ["Vector Search", "Document Viewer", "SQL Query"]),
-            ("📊 Data Management", ["Data App", "File Import", "Data Quality"]),
+            ("🔍 Search", ["Vector Search"]),
+            ("📊 Data Management", ["Table", "Data Quality"]),
+            ("📈 Analytics", ["Charts & Reports", "SQL Query", "Document Viewer"]),
             ("⚡ Workflows", ["Agent Builder", "Task Manager", "Scheduler"]),
             ("🛡️ Governance", ["Documentation", "Permissions", "Metadata"]),
             ("🚀 Applications", ["App Builder", "Configuration", "Export"])

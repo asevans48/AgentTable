@@ -1,11 +1,12 @@
 """
-Search Section Widget
-Main search interface with vector search, document viewer, and SQL query tabs
+Analytics Section Widget
+Charts & Reports, SQL Query, and Document Viewer functionality
 """
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTabWidget, QTextEdit,
-    QLabel, QPushButton, QFrame, QComboBox, QCheckBox
+    QLabel, QPushButton, QFrame, QComboBox, QCheckBox, QSplitter, 
+    QGroupBox, QFormLayout
 )
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QFont, QSyntaxHighlighter, QTextCharFormat, QColor
@@ -67,10 +68,11 @@ class SQLHighlighter(QSyntaxHighlighter):
                 start, end = match.span()
                 self.setFormat(start, end - start, format)
 
-class VectorSearchTab(QWidget):
-    """Vector search tab widget"""
+class ChartsReportsTab(QWidget):
+    """Charts and reports creation tab"""
     
-    search_performed = pyqtSignal(str, dict)  # query, results
+    chart_created = pyqtSignal(dict)  # chart_config
+    report_generated = pyqtSignal(dict)  # report_config
     
     def __init__(self, config_manager, parent=None):
         super().__init__(parent)
@@ -78,59 +80,161 @@ class VectorSearchTab(QWidget):
         self.setup_ui()
         
     def setup_ui(self):
-        """Setup vector search UI"""
+        """Setup charts and reports UI"""
         layout = QVBoxLayout(self)
         
-        # Search configuration
-        config_frame = QFrame()
-        config_frame.setFrameStyle(QFrame.Shape.StyledPanel)
-        config_layout = QHBoxLayout(config_frame)
+        # Main splitter for chart builder and preview
+        main_splitter = QSplitter(Qt.Orientation.Horizontal)
         
-        # Embedding model selection
-        config_layout.addWidget(QLabel("Model:"))
-        self.model_combo = QComboBox()
-        self.model_combo.addItems([
-            "all-MiniLM-L6-v2", "all-mpnet-base-v2", "text-embedding-ada-002"
-        ])
-        config_layout.addWidget(self.model_combo)
+        # Left panel - Chart configuration
+        config_panel = QFrame()
+        config_panel.setFrameStyle(QFrame.Shape.StyledPanel)
+        config_panel.setMaximumWidth(400)
+        config_layout = QVBoxLayout(config_panel)
         
-        # Search scope
-        config_layout.addWidget(QLabel("Scope:"))
-        self.scope_combo = QComboBox()
-        self.scope_combo.addItems(["All Documents", "Recent Files", "Accessible Only"])
-        config_layout.addWidget(self.scope_combo)
+        # Data source selection
+        data_group = QGroupBox("Data Source")
+        data_layout = QFormLayout(data_group)
         
-        # Max results
-        config_layout.addWidget(QLabel("Max Results:"))
-        self.max_results = QComboBox()
-        self.max_results.addItems(["10", "25", "50", "100"])
-        config_layout.addWidget(self.max_results)
+        self.data_source = QComboBox()
+        self.data_source.addItems(["Select Dataset...", "Customer Analytics", "Sales Performance", "Financial Reports"])
+        data_layout.addRow("Dataset:", self.data_source)
         
+        self.query_input = QTextEdit()
+        self.query_input.setPlaceholderText("Enter SQL query or select columns...")
+        self.query_input.setMaximumHeight(100)
+        data_layout.addRow("Query:", self.query_input)
+        
+        config_layout.addWidget(data_group)
+        
+        # Chart type selection
+        chart_group = QGroupBox("Chart Configuration")
+        chart_layout = QFormLayout(chart_group)
+        
+        self.chart_type = QComboBox()
+        self.chart_type.addItems(["Bar Chart", "Line Chart", "Pie Chart", "Scatter Plot", "Histogram", "Box Plot"])
+        chart_layout.addRow("Chart Type:", self.chart_type)
+        
+        self.x_axis = QComboBox()
+        self.x_axis.addItems(["Select Column...", "Date", "Category", "Region", "Product"])
+        chart_layout.addRow("X-Axis:", self.x_axis)
+        
+        self.y_axis = QComboBox()
+        self.y_axis.addItems(["Select Column...", "Revenue", "Count", "Amount", "Percentage"])
+        chart_layout.addRow("Y-Axis:", self.y_axis)
+        
+        self.group_by = QComboBox()
+        self.group_by.addItems(["None", "Category", "Region", "Date"])
+        chart_layout.addRow("Group By:", self.group_by)
+        
+        config_layout.addWidget(chart_group)
+        
+        # Chart styling
+        style_group = QGroupBox("Styling")
+        style_layout = QFormLayout(style_group)
+        
+        self.chart_title = QLineEdit()
+        self.chart_title.setPlaceholderText("Enter chart title...")
+        style_layout.addRow("Title:", self.chart_title)
+        
+        self.color_scheme = QComboBox()
+        self.color_scheme.addItems(["Default", "Blues", "Greens", "Reds", "Rainbow"])
+        style_layout.addRow("Colors:", self.color_scheme)
+        
+        self.show_legend = QCheckBox("Show Legend")
+        self.show_legend.setChecked(True)
+        style_layout.addRow(self.show_legend)
+        
+        config_layout.addWidget(style_group)
+        
+        # Action buttons
+        button_layout = QHBoxLayout()
+        
+        preview_btn = QPushButton("Preview")
+        preview_btn.clicked.connect(self.preview_chart)
+        button_layout.addWidget(preview_btn)
+        
+        save_btn = QPushButton("Save Chart")
+        save_btn.clicked.connect(self.save_chart)
+        button_layout.addWidget(save_btn)
+        
+        export_btn = QPushButton("Export")
+        export_btn.clicked.connect(self.export_chart)
+        button_layout.addWidget(export_btn)
+        
+        config_layout.addLayout(button_layout)
         config_layout.addStretch()
         
-        # Semantic search toggle
-        self.semantic_search = QCheckBox("Semantic Search")
-        self.semantic_search.setChecked(True)
-        config_layout.addWidget(self.semantic_search)
+        main_splitter.addWidget(config_panel)
         
-        layout.addWidget(config_frame)
+        # Right panel - Chart preview
+        preview_panel = QFrame()
+        preview_panel.setFrameStyle(QFrame.Shape.StyledPanel)
+        preview_layout = QVBoxLayout(preview_panel)
         
-        # Results area (placeholder)
-        results_label = QLabel("Vector search results will appear here after implementing the search backend.")
-        results_label.setStyleSheet("""
+        preview_label = QLabel("Chart Preview")
+        preview_label.setFont(QFont("Arial", 12, QFont.Weight.Bold))
+        preview_layout.addWidget(preview_label)
+        
+        # Placeholder for chart preview
+        self.chart_preview = QLabel("Select data source and configure chart to see preview")
+        self.chart_preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.chart_preview.setStyleSheet("""
             QLabel {
-                color: #666;
-                font-style: italic;
-                text-align: center;
-                padding: 20px;
                 border: 2px dashed #ddd;
                 border-radius: 8px;
                 background-color: #f9f9f9;
+                color: #666;
+                padding: 40px;
+                font-size: 14pt;
             }
         """)
-        results_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        results_label.setWordWrap(True)
-        layout.addWidget(results_label)
+        preview_layout.addWidget(self.chart_preview)
+        
+        main_splitter.addWidget(preview_panel)
+        main_splitter.setSizes([400, 600])
+        
+        layout.addWidget(main_splitter)
+        
+    def preview_chart(self):
+        """Preview the configured chart"""
+        chart_config = self.get_chart_config()
+        
+        # Placeholder implementation
+        preview_text = f"Chart Preview:\n\n"
+        preview_text += f"Type: {chart_config['type']}\n"
+        preview_text += f"Data: {chart_config['data_source']}\n"
+        preview_text += f"X-Axis: {chart_config['x_axis']}\n"
+        preview_text += f"Y-Axis: {chart_config['y_axis']}\n"
+        preview_text += f"Title: {chart_config['title']}\n\n"
+        preview_text += "Chart visualization would appear here after implementing charting backend."
+        
+        self.chart_preview.setText(preview_text)
+        self.chart_preview.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+        
+    def save_chart(self):
+        """Save chart configuration"""
+        chart_config = self.get_chart_config()
+        self.chart_created.emit(chart_config)
+        
+    def export_chart(self):
+        """Export chart to file"""
+        # Placeholder implementation
+        logger.info("Chart export functionality to be implemented")
+        
+    def get_chart_config(self):
+        """Get current chart configuration"""
+        return {
+            'type': self.chart_type.currentText(),
+            'data_source': self.data_source.currentText(),
+            'query': self.query_input.toPlainText(),
+            'x_axis': self.x_axis.currentText(),
+            'y_axis': self.y_axis.currentText(),
+            'group_by': self.group_by.currentText(),
+            'title': self.chart_title.text(),
+            'color_scheme': self.color_scheme.currentText(),
+            'show_legend': self.show_legend.isChecked()
+        }
 
 class DocumentViewerTab(QWidget):
     """Document viewer tab widget"""
@@ -308,10 +412,12 @@ class SQLQueryTab(QWidget):
         self.query_editor.clear()
         self.results_area.clear()
 
-class SearchSection(QWidget):
-    """Main search section focused on vector search"""
+class AnalyticsSection(QWidget):
+    """Analytics section with Charts & Reports, SQL Query, and Document Viewer"""
     
-    search_performed = pyqtSignal(str, str, dict)  # query, search_type, results
+    chart_created = pyqtSignal(dict)  # chart_config
+    query_executed = pyqtSignal(str, dict)  # query, results
+    document_opened = pyqtSignal(str)  # document_path
     
     def __init__(self, config_manager, parent=None):
         super().__init__(parent)
@@ -320,14 +426,14 @@ class SearchSection(QWidget):
         self.setup_connections()
         
     def setup_ui(self):
-        """Setup search section UI"""
+        """Setup analytics section UI"""
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         
         # Section header
         header_layout = QHBoxLayout()
         
-        title = QLabel("Vector Search")
+        title = QLabel("Analytics & Reporting")
         title.setFont(QFont("Arial", 14, QFont.Weight.Bold))
         title.setStyleSheet("color: #333; padding: 8px;")
         header_layout.addWidget(title)
@@ -336,34 +442,80 @@ class SearchSection(QWidget):
         
         # Quick access buttons
         refresh_btn = QPushButton("🔄 Refresh")
-        refresh_btn.setToolTip("Refresh search indices")
-        refresh_btn.clicked.connect(self.refresh_indices)
+        refresh_btn.setToolTip("Refresh data sources")
+        refresh_btn.clicked.connect(self.refresh_data)
         header_layout.addWidget(refresh_btn)
         
         layout.addLayout(header_layout)
         
-        # Vector Search interface (no tabs needed since it's just one function)
-        self.vector_tab = VectorSearchTab(self.config_manager)
-        layout.addWidget(self.vector_tab)
+        # Tab widget for different analytics tools
+        self.tab_widget = QTabWidget()
+        self.tab_widget.setStyleSheet("""
+            QTabWidget::pane {
+                border: 1px solid #ddd;
+                border-radius: 4px;
+                background-color: white;
+            }
+            QTabBar::tab {
+                background-color: #f8f9fa;
+                border: 1px solid #ddd;
+                border-bottom: none;
+                border-radius: 4px 4px 0 0;
+                padding: 8px 16px;
+                margin-right: 2px;
+            }
+            QTabBar::tab:selected {
+                background-color: white;
+                border-bottom: 1px solid white;
+            }
+            QTabBar::tab:hover {
+                background-color: #e9ecef;
+            }
+        """)
+        
+        # Charts & Reports tab
+        self.charts_tab = ChartsReportsTab(self.config_manager)
+        self.tab_widget.addTab(self.charts_tab, "📊 Charts & Reports")
+        
+        # SQL Query tab
+        self.sql_tab = SQLQueryTab(self.config_manager)
+        self.tab_widget.addTab(self.sql_tab, "🗄️ SQL Query")
+        
+        # Document Viewer tab
+        self.document_tab = DocumentViewerTab(self.config_manager)
+        self.tab_widget.addTab(self.document_tab, "📄 Document Viewer")
+        
+        layout.addWidget(self.tab_widget)
         
     def setup_connections(self):
         """Setup signal-slot connections"""
-        self.vector_tab.search_performed.connect(
-            lambda q, r: self.search_performed.emit(q, "Vector Search", r)
-        )
+        self.charts_tab.chart_created.connect(self.chart_created.emit)
+        self.sql_tab.query_executed.connect(self.query_executed.emit)
+        self.document_tab.document_opened.connect(self.document_opened.emit)
         
-    def refresh_indices(self):
-        """Refresh search indices"""
-        logger.info("Refreshing search indices")
+    def refresh_data(self):
+        """Refresh data sources"""
+        logger.info("Refreshing analytics data sources")
         # Placeholder implementation
-        # This would trigger re-indexing of documents and vector embeddings
+        # This would refresh available datasets, documents, etc.
         
-    def handle_search_query(self, query: str, search_type: str):
-        """Handle search query from main search bar"""
-        if search_type == "Vector Search":
-            # Trigger vector search with query
-            pass
-            
     def get_current_tab_name(self) -> str:
         """Get name of currently active tab"""
-        return "Vector Search"
+        current_index = self.tab_widget.currentIndex()
+        return self.tab_widget.tabText(current_index)
+        
+    def switch_to_tab(self, tab_name: str):
+        """Switch to specific tab by name"""
+        for i in range(self.tab_widget.count()):
+            if tab_name.lower() in self.tab_widget.tabText(i).lower():
+                self.tab_widget.setCurrentIndex(i)
+                break
+                
+    def handle_query(self, query: str, query_type: str):
+        """Handle query from main search bar"""
+        if query_type == "SQL Query":
+            self.tab_widget.setCurrentWidget(self.sql_tab)
+            self.sql_tab.query_editor.setText(query)
+        elif query_type == "Document Search":
+            self.tab_widget.setCurrentWidget(self.document_tab)
+            # Trigger document search with query
