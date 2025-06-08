@@ -79,30 +79,38 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
         
-        # Modern header with gradient background
+        # Modern solid header with sleek design
         header_frame = QFrame()
         header_frame.setStyleSheet("""
             QFrame {
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #667eea, stop:1 #764ba2);
+                background-color: #2c3e50;
                 border: none;
                 border-radius: 0px;
-                padding: 16px;
+                padding: 20px 16px;
             }
         """)
         header_layout = QVBoxLayout(header_frame)
-        header_layout.setContentsMargins(16, 16, 16, 16)
+        header_layout.setContentsMargins(16, 20, 16, 20)
+        header_layout.setSpacing(8)
         
-        # App title
+        # App title with modern typography
         app_title = QLabel("Data Platform")
-        app_title.setFont(QFont("Segoe UI", 14, QFont.Weight.Bold))
-        app_title.setStyleSheet("color: white; margin-bottom: 4px;")
+        app_title.setFont(QFont("Segoe UI", 16, QFont.Weight.Bold))
+        app_title.setStyleSheet("""
+            color: #ffffff;
+            margin-bottom: 0px;
+            letter-spacing: 0.5px;
+        """)
         header_layout.addWidget(app_title)
         
-        # Subtitle
+        # Subtitle with clean styling
         subtitle = QLabel("Navigate & Explore")
-        subtitle.setFont(QFont("Segoe UI", 9))
-        subtitle.setStyleSheet("color: rgba(255, 255, 255, 0.8);")
+        subtitle.setFont(QFont("Segoe UI", 10, QFont.Weight.Normal))
+        subtitle.setStyleSheet("""
+            color: #bdc3c7;
+            margin-top: 0px;
+            font-weight: 400;
+        """)
         header_layout.addWidget(subtitle)
         
         layout.addWidget(header_frame)
