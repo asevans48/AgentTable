@@ -90,7 +90,7 @@ class MainWindow(QMainWindow):
             }
         """)
         header_layout = QVBoxLayout(header_frame)
-        header_layout.setContentsMargins(16, 16, 16, 16)
+        header_layout.setContentsMargins(0, 16, 0, 16)
         header_layout.setSpacing(0)
         
         # App title with modern typography - centered
@@ -100,6 +100,7 @@ class MainWindow(QMainWindow):
             color: #ffffff;
             margin: 0px;
             letter-spacing: 0.5px;
+            text-align: center;
         """)
         app_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         header_layout.addWidget(app_title)
