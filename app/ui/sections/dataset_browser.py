@@ -36,8 +36,7 @@ class DatasetItem(QFrame):
                 border: 1px solid #e0e0e0;
                 border-radius: 4px;
                 margin: 1px;
-                padding: 4px;
-                max-height: 80px;
+                padding: 8px;
             }
             QFrame:hover {
                 border-color: #1a73e8;
@@ -46,8 +45,8 @@ class DatasetItem(QFrame):
         """)
         
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(6, 6, 6, 6)
-        layout.setSpacing(3)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(6)
         
         # Header with name and type
         header_layout = QHBoxLayout()
