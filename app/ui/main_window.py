@@ -65,23 +65,122 @@ class MainWindow(QMainWindow):
     def create_sections_panel(self):
         """Create the left sections panel"""
         panel = QFrame()
-        panel.setFrameStyle(QFrame.Shape.StyledPanel)
         panel.setMaximumWidth(300)
         panel.setMinimumWidth(200)
+        panel.setStyleSheet("""
+            QFrame {
+                background-color: #f8f9fa;
+                border-right: 1px solid #e9ecef;
+                border-radius: 0px;
+            }
+        """)
         
         layout = QVBoxLayout(panel)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
         
-        # Sections header
-        header = QLabel("Sections")
-        header.setFont(QFont("Arial", 12, QFont.Weight.Bold))
-        header.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(header)
+        # Modern header with gradient background
+        header_frame = QFrame()
+        header_frame.setStyleSheet("""
+            QFrame {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #667eea, stop:1 #764ba2);
+                border: none;
+                border-radius: 0px;
+                padding: 16px;
+            }
+        """)
+        header_layout = QVBoxLayout(header_frame)
+        header_layout.setContentsMargins(16, 16, 16, 16)
         
-        # Sections tree
+        # App title
+        app_title = QLabel("Data Platform")
+        app_title.setFont(QFont("Segoe UI", 14, QFont.Weight.Bold))
+        app_title.setStyleSheet("color: white; margin-bottom: 4px;")
+        header_layout.addWidget(app_title)
+        
+        # Subtitle
+        subtitle = QLabel("Navigate & Explore")
+        subtitle.setFont(QFont("Segoe UI", 9))
+        subtitle.setStyleSheet("color: rgba(255, 255, 255, 0.8);")
+        header_layout.addWidget(subtitle)
+        
+        layout.addWidget(header_frame)
+        
+        # Sections tree with modern styling
         self.sections_tree = QTreeWidget()
         self.sections_tree.setHeaderHidden(True)
+        self.sections_tree.setRootIsDecorated(False)
+        self.sections_tree.setIndentation(20)
+        self.sections_tree.setStyleSheet("""
+            QTreeWidget {
+                background-color: #f8f9fa;
+                border: none;
+                outline: none;
+                font-family: 'Segoe UI', Arial, sans-serif;
+                font-size: 10pt;
+                padding: 8px 0px;
+            }
+            QTreeWidget::item {
+                padding: 12px 16px;
+                border: none;
+                color: #495057;
+                font-weight: 500;
+            }
+            QTreeWidget::item:hover {
+                background-color: #e9ecef;
+                color: #212529;
+                border-radius: 0px;
+            }
+            QTreeWidget::item:selected {
+                background-color: #007bff;
+                color: white;
+                border-radius: 0px;
+            }
+            QTreeWidget::item:selected:hover {
+                background-color: #0056b3;
+            }
+            QTreeWidget::branch {
+                background: transparent;
+            }
+            QTreeWidget::branch:has-children:!has-siblings:closed,
+            QTreeWidget::branch:closed:has-children:has-siblings {
+                border-image: none;
+                image: none;
+            }
+            QTreeWidget::branch:open:has-children:!has-siblings,
+            QTreeWidget::branch:open:has-children:has-siblings {
+                border-image: none;
+                image: none;
+            }
+        """)
+        
         self.populate_sections_tree()
         layout.addWidget(self.sections_tree)
+        
+        # Modern footer with user info
+        footer_frame = QFrame()
+        footer_frame.setStyleSheet("""
+            QFrame {
+                background-color: #ffffff;
+                border-top: 1px solid #e9ecef;
+                padding: 12px 16px;
+            }
+        """)
+        footer_layout = QVBoxLayout(footer_frame)
+        footer_layout.setContentsMargins(16, 12, 16, 12)
+        
+        user_label = QLabel("👤 Current User")
+        user_label.setFont(QFont("Segoe UI", 9))
+        user_label.setStyleSheet("color: #6c757d; margin-bottom: 2px;")
+        footer_layout.addWidget(user_label)
+        
+        status_label = QLabel("🟢 Connected")
+        status_label.setFont(QFont("Segoe UI", 8))
+        status_label.setStyleSheet("color: #28a745;")
+        footer_layout.addWidget(status_label)
+        
+        layout.addWidget(footer_frame)
         
         return panel
         
@@ -129,22 +228,32 @@ class MainWindow(QMainWindow):
     def populate_sections_tree(self):
         """Populate the sections tree with available sections"""
         sections_data = [
-            ("Search", ["Vector Search", "Document Viewer", "SQL Query"]),
-            ("Data Management", ["Data App", "File Import", "Data Quality"]),
-            ("Workflows", ["Agent Builder", "Task Manager", "Scheduler"]),
-            ("Governance", ["Documentation", "Permissions", "Metadata"]),
-            ("Applications", ["App Builder", "Configuration", "Export"])
+            ("🔍 Search", ["Vector Search", "Document Viewer", "SQL Query"]),
+            ("📊 Data Management", ["Data App", "File Import", "Data Quality"]),
+            ("⚡ Workflows", ["Agent Builder", "Task Manager", "Scheduler"]),
+            ("🛡️ Governance", ["Documentation", "Permissions", "Metadata"]),
+            ("🚀 Applications", ["App Builder", "Configuration", "Export"])
         ]
         
         for section_name, subsections in sections_data:
+            # Create main section item
             section_item = QTreeWidgetItem([section_name])
+            section_item.setFont(0, QFont("Segoe UI", 10, QFont.Weight.Bold))
             section_item.setExpanded(True)
             
+            # Style the main section
+            section_item.setData(0, Qt.ItemDataRole.UserRole, "section")
+            
             for subsection in subsections:
-                subsection_item = QTreeWidgetItem([subsection])
+                subsection_item = QTreeWidgetItem([f"  {subsection}"])
+                subsection_item.setFont(0, QFont("Segoe UI", 9))
+                subsection_item.setData(0, Qt.ItemDataRole.UserRole, "subsection")
                 section_item.addChild(subsection_item)
                 
             self.sections_tree.addTopLevelItem(section_item)
+        
+        # Expand all sections by default
+        self.sections_tree.expandAll()
             
     def setup_menu_bar(self):
         """Setup the application menu bar"""
