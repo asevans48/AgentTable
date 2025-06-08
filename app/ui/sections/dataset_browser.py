@@ -5,7 +5,7 @@ Shows registered datasets with filtering and access information
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, 
-    QComboBox, QLineEdit, QFrame,
+    QComboBox, QLineEdit, QFrame, QScrollArea,
     QMessageBox, QDialog, QTextEdit, QFormLayout
 )
 from PyQt6.QtCore import Qt, pyqtSignal
