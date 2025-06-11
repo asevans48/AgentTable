@@ -267,6 +267,29 @@ class FileBrowser(QWidget):
         self.metadata_filter.setMaximumHeight(24)
         filter_layout.addWidget(self.metadata_filter)
         
+        # Show all files button
+        self.show_all_btn = QPushButton("All Files")
+        self.show_all_btn.setToolTip("Show all files from all directories")
+        self.show_all_btn.setStyleSheet("""
+            QPushButton {
+                font-size: 8pt;
+                padding: 2px 6px;
+                background-color: #6c757d;
+                color: white;
+                border: none;
+                border-radius: 3px;
+            }
+            QPushButton:hover {
+                background-color: #545b62;
+            }
+            QPushButton:checked {
+                background-color: #007bff;
+            }
+        """)
+        self.show_all_btn.setCheckable(True)
+        self.show_all_btn.clicked.connect(self.toggle_show_all_files)
+        filter_layout.addWidget(self.show_all_btn)
+        
         header_layout.addLayout(filter_layout)
         layout.addLayout(header_layout)
         
@@ -412,6 +435,8 @@ class FileBrowser(QWidget):
             item = self.watched_model.itemFromIndex(index)
             path = item.data(Qt.ItemDataRole.UserRole)
             if path:
+                # Uncheck show all files button when selecting a specific directory
+                self.show_all_btn.setChecked(False)
                 self.current_directory = path
                 
                 # Debug: Check if we have files for this directory
@@ -517,7 +542,9 @@ class FileBrowser(QWidget):
                 print(f"DEBUG: File: {f['name']} in {Path(f['path']).parent}")
         
         # Update status
-        if self.current_directory:
+        if self.show_all_btn.isChecked():
+            self.status_label.setText(f"All files ({visible_count} files)")
+        elif self.current_directory:
             dir_name = Path(self.current_directory).name
             self.status_label.setText(f"📂 {dir_name} ({visible_count} files)")
         else:
@@ -603,8 +630,8 @@ class FileBrowser(QWidget):
         
     def passes_filter(self, file_info: Dict[str, Any]) -> bool:
         """Check if file passes current filters"""
-        # Directory filter - show files in the selected directory
-        if self.current_directory:
+        # Directory filter - show files in the selected directory (unless showing all files)
+        if self.current_directory and not self.show_all_btn.isChecked():
             file_dir = str(Path(file_info['path']).parent)
             current_dir = str(Path(self.current_directory))
             
@@ -886,6 +913,10 @@ class FileBrowser(QWidget):
         
         menu.addSeparator()
         
+        edit_metadata_action = QAction("Edit Metadata", self)
+        edit_metadata_action.triggered.connect(lambda: self.edit_file_metadata(file_path))
+        menu.addAction(edit_metadata_action)
+        
         properties_action = QAction("Properties", self)
         properties_action.triggered.connect(lambda: self.show_file_properties(file_path))
         menu.addAction(properties_action)
@@ -991,6 +1022,202 @@ Directory: {file_info['directory']}
                     self.apply_filters()
                     
                 self.status_label.setText(f"Removed '{Path(directory_path).name}' from watch list")
+                
+    def toggle_show_all_files(self):
+        """Toggle between showing all files or directory-specific files"""
+        if self.show_all_btn.isChecked():
+            # Show all files - clear current directory selection
+            self.current_directory = None
+            # Clear selection in watched directories tree
+            self.watched_tree.clearSelection()
+        
+        # Reapply filters to update the view
+        self.apply_filters()
+        
+    def edit_file_metadata(self, file_path: str):
+        """Edit metadata for a specific file"""
+        dialog = FileMetadataDialog(file_path, self.metadata_manager, self)
+        if dialog.exec():
+            metadata = dialog.get_metadata()
+            self.metadata_manager.set_file_metadata(file_path, metadata)
+            
+            # Refresh the file display to show updated metadata
+            self.apply_filters()
+            
+            # Emit signal for other components
+            self.file_metadata_changed.emit(file_path, metadata)
+            
+            self.status_label.setText(f"Updated metadata for '{Path(file_path).name}'")
+
+class FileMetadataDialog(QDialog):
+    """Dialog for editing individual file metadata"""
+    
+    def __init__(self, file_path: str, metadata_manager, parent=None):
+        super().__init__(parent)
+        self.file_path = file_path
+        self.metadata_manager = metadata_manager
+        self.setup_ui()
+        self.load_current_metadata()
+        
+    def setup_ui(self):
+        """Setup the metadata dialog UI"""
+        self.setWindowTitle("Edit File Metadata")
+        self.setModal(True)
+        self.setMinimumSize(500, 400)
+        
+        layout = QVBoxLayout(self)
+        
+        # Header
+        header_label = QLabel(f"<h3>Edit Metadata</h3>")
+        layout.addWidget(header_label)
+        
+        file_name = Path(self.file_path).name
+        path_label = QLabel(f"<b>File:</b> {file_name}")
+        path_label.setWordWrap(True)
+        layout.addWidget(path_label)
+        
+        full_path_label = QLabel(f"<small>{self.file_path}</small>")
+        full_path_label.setStyleSheet("color: #666; margin-bottom: 10px;")
+        full_path_label.setWordWrap(True)
+        layout.addWidget(full_path_label)
+        
+        # Form layout
+        form_layout = QFormLayout()
+        
+        # Description
+        self.description = QTextEdit()
+        self.description.setMaximumHeight(80)
+        self.description.setPlaceholderText("Describe what this file contains...")
+        form_layout.addRow("Description:", self.description)
+        
+        # Tags
+        self.tags = QLineEdit()
+        self.tags.setPlaceholderText("tag1, tag2, tag3 (comma-separated)")
+        form_layout.addRow("Tags:", self.tags)
+        
+        # Category
+        self.category = QComboBox()
+        self.category.setEditable(True)
+        self.category.addItems([
+            "", "Data", "Documentation", "Code", "Reports", 
+            "Configuration", "Templates", "Archive", "Reference"
+        ])
+        form_layout.addRow("Category:", self.category)
+        
+        # Priority
+        self.priority = QComboBox()
+        self.priority.addItems(["Low", "Normal", "High", "Critical"])
+        self.priority.setCurrentText("Normal")
+        form_layout.addRow("Priority:", self.priority)
+        
+        # Custom fields section
+        custom_group = QGroupBox("Custom Fields")
+        custom_layout = QVBoxLayout(custom_group)
+        
+        # Custom field inputs (simple key-value pairs)
+        self.custom_fields = QTextEdit()
+        self.custom_fields.setMaximumHeight(60)
+        self.custom_fields.setPlaceholderText("key1: value1\nkey2: value2")
+        custom_layout.addWidget(self.custom_fields)
+        
+        form_layout.addRow(custom_group)
+        
+        # Vector search indexing
+        self.indexed_checkbox = QCheckBox("Indexed for vector search")
+        self.indexed_checkbox.setEnabled(False)  # Read-only, managed by vector search system
+        form_layout.addRow("", self.indexed_checkbox)
+        
+        layout.addLayout(form_layout)
+        
+        # Buttons
+        button_layout = QHBoxLayout()
+        
+        clear_btn = QPushButton("Clear All")
+        clear_btn.clicked.connect(self.clear_metadata)
+        button_layout.addWidget(clear_btn)
+        
+        button_layout.addStretch()
+        
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.clicked.connect(self.reject)
+        button_layout.addWidget(cancel_btn)
+        
+        save_btn = QPushButton("Save Metadata")
+        save_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #007bff;
+                color: white;
+                border: none;
+                padding: 8px 16px;
+                border-radius: 4px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #0056b3;
+            }
+        """)
+        save_btn.clicked.connect(self.accept)
+        button_layout.addWidget(save_btn)
+        
+        layout.addWidget(QFrame())  # Spacer
+        layout.addLayout(button_layout)
+        
+    def load_current_metadata(self):
+        """Load current metadata into the form"""
+        metadata = self.metadata_manager.get_file_metadata(self.file_path)
+        
+        self.description.setPlainText(metadata.get('description', ''))
+        self.tags.setText(', '.join(metadata.get('tags', [])))
+        self.category.setCurrentText(metadata.get('category', ''))
+        self.priority.setCurrentText(metadata.get('priority', 'Normal'))
+        self.indexed_checkbox.setChecked(metadata.get('indexed_for_vector_search', False))
+        
+        # Load custom fields
+        custom_fields = metadata.get('custom_fields', {})
+        if custom_fields:
+            custom_text = '\n'.join([f"{k}: {v}" for k, v in custom_fields.items()])
+            self.custom_fields.setPlainText(custom_text)
+            
+    def clear_metadata(self):
+        """Clear all metadata fields"""
+        from PyQt6.QtWidgets import QMessageBox
+        
+        reply = QMessageBox.question(
+            self,
+            "Clear Metadata",
+            "Are you sure you want to clear all metadata for this file?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+        
+        if reply == QMessageBox.StandardButton.Yes:
+            self.description.clear()
+            self.tags.clear()
+            self.category.setCurrentText("")
+            self.priority.setCurrentText("Normal")
+            self.custom_fields.clear()
+            
+    def get_metadata(self) -> Dict[str, Any]:
+        """Get the collected metadata"""
+        tags_list = [tag.strip() for tag in self.tags.text().split(',') if tag.strip()]
+        
+        # Parse custom fields
+        custom_fields = {}
+        custom_text = self.custom_fields.toPlainText().strip()
+        if custom_text:
+            for line in custom_text.split('\n'):
+                if ':' in line:
+                    key, value = line.split(':', 1)
+                    custom_fields[key.strip()] = value.strip()
+        
+        return {
+            'description': self.description.toPlainText().strip(),
+            'tags': tags_list,
+            'category': self.category.currentText().strip(),
+            'priority': self.priority.currentText(),
+            'custom_fields': custom_fields,
+            'indexed_for_vector_search': self.indexed_checkbox.isChecked()
+        }
 
 class DirectoryMetadataDialog(QDialog):
     """Dialog for collecting metadata when adding a directory"""
