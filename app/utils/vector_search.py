@@ -110,7 +110,13 @@ class VectorSearchEngine:
                 
             # Use absolute path for SQLite connection
             db_path_str = str(self.vector_db_path.resolve())
-            logger.info(f"Initializing vector database at: {db_path_str}")
+            
+            # Check if database already exists
+            db_exists = self.vector_db_path.exists()
+            if db_exists:
+                logger.info(f"Loading existing vector database at: {db_path_str}")
+            else:
+                logger.info(f"Creating new vector database at: {db_path_str}")
             
             # Test that we can create/access the database file
             conn = sqlite3.connect(db_path_str)
@@ -138,6 +144,13 @@ class VectorSearchEngine:
                     cursor.execute("ALTER TABLE documents ADD COLUMN user_description TEXT")
                     
                 logger.info("Database schema updated with new metadata columns")
+                
+                # Log existing database stats
+                cursor.execute("SELECT COUNT(*) FROM documents WHERE indexed_at IS NOT NULL")
+                indexed_count = cursor.fetchone()[0]
+                cursor.execute("SELECT COUNT(*) FROM chunks")
+                chunk_count = cursor.fetchone()[0]
+                logger.info(f"Loaded existing database with {indexed_count} indexed documents and {chunk_count} chunks")
             else:
                 # Create documents table with all columns
                 cursor.execute("""
@@ -160,6 +173,7 @@ class VectorSearchEngine:
                         chunk_count INTEGER DEFAULT 0
                     )
                 """)
+                logger.info("Created new vector database tables")
             
             # Check and update chunks table
             cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='chunks'")
@@ -1775,7 +1789,8 @@ class VectorSearchEngine:
                     'recent_indexing_count': 0,
                     'embeddings_path': str(self.embeddings_path),
                     'database_path': str(self.vector_db_path),
-                    'status': 'Database not found'
+                    'status': 'Database not found',
+                    'is_empty': True
                 }
                 
             conn = sqlite3.connect(db_path_str)
@@ -1830,7 +1845,16 @@ class VectorSearchEngine:
             if self.embeddings_path.exists():
                 embedding_count = len(list(self.embeddings_path.glob("*.npy")))
             
+            # Get database file size
+            db_size = Path(db_path_str).stat().st_size if Path(db_path_str).exists() else 0
+            
             conn.close()
+            
+            # Determine status
+            if doc_count > 0:
+                status = f'Ready - {doc_count} documents indexed'
+            else:
+                status = 'Empty database - no documents indexed'
             
             return {
                 'document_count': doc_count,
@@ -1838,12 +1862,14 @@ class VectorSearchEngine:
                 'embedding_count': embedding_count,
                 'fileset_count': fileset_count,
                 'total_size_bytes': total_size,
+                'database_size_bytes': db_size,
                 'file_types': file_types,
                 'recent_indexing_count': recent_count,
                 'top_tags': top_tags,
                 'embeddings_path': str(self.embeddings_path),
                 'database_path': str(self.vector_db_path),
-                'status': 'Ready' if doc_count > 0 else 'No documents indexed'
+                'status': status,
+                'is_empty': doc_count == 0
             }
             
         except Exception as e:
@@ -1851,7 +1877,8 @@ class VectorSearchEngine:
             return {
                 'status': f'Error: {str(e)}',
                 'embeddings_path': str(self.embeddings_path),
-                'database_path': str(self.vector_db_path)
+                'database_path': str(self.vector_db_path),
+                'is_empty': True
             }
     
     def _analyze_query(self, query: str) -> Dict[str, Any]:

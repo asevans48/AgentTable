@@ -612,15 +612,36 @@ class MainWindow(QMainWindow):
         """Rebuild the vector search database"""
         from PyQt6.QtWidgets import QMessageBox
         
-        reply = QMessageBox.question(
-            self,
-            "Rebuild Vector Database",
-            "This will rebuild the entire vector search database.\n\n"
-            "This may take several minutes depending on the amount of data.\n\n"
-            "Continue?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.Yes
-        )
+        # First check if there's an existing database
+        try:
+            from utils.vector_search import VectorSearchEngine
+            vector_engine = VectorSearchEngine(self.config_manager)
+            stats = vector_engine.get_index_stats()
+            existing_docs = stats.get('document_count', 0)
+            
+            if existing_docs > 0:
+                reply = QMessageBox.question(
+                    self,
+                    "Rebuild Vector Database",
+                    f"This will rebuild the entire vector search database.\n\n"
+                    f"Current database contains {existing_docs} indexed documents.\n"
+                    f"This may take several minutes depending on the amount of data.\n\n"
+                    f"Continue?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No
+                )
+            else:
+                reply = QMessageBox.question(
+                    self,
+                    "Build Vector Database",
+                    "This will build the vector search database from your data sources.\n\n"
+                    "This may take several minutes depending on the amount of data.\n\n"
+                    "Continue?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.Yes
+                )
+        except Exception:
+            reply = QMessageBox.StandardButton.Yes
         
         if reply == QMessageBox.StandardButton.Yes:
             # Access the search results widget and trigger rebuild

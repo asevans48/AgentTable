@@ -281,19 +281,30 @@ schemas, and metadata rather than full content. This provides faster indexing an
         self.model_combo.currentTextChanged.connect(self.on_model_changed)
         
     def load_vector_engine(self):
-        """Load the vector search engine"""
+        """Load the vector search engine and existing database"""
         try:
             from utils.vector_search import VectorSearchEngine
+            
+            # Show loading status
+            self.db_status_label.setText("🔄 Loading vector search engine...")
+            self.db_status_label.setStyleSheet("color: #6c757d; font-weight: bold;")
+            
+            # Initialize vector engine (this will load existing database if present)
             self.vector_engine = VectorSearchEngine(self.config_manager)
+            
+            # Update status with loaded database information
             self.update_database_status()
+            
         except ImportError:
             self.db_status_label.setText("❌ Vector search dependencies not installed")
             self.db_status_label.setStyleSheet("color: #dc3545; font-weight: bold;")
             self.rebuild_btn.setEnabled(False)
             self.clear_index_btn.setEnabled(False)
+            logger.error("Vector search dependencies not available")
         except Exception as e:
             self.db_status_label.setText(f"❌ Error loading vector engine: {str(e)}")
             self.db_status_label.setStyleSheet("color: #dc3545; font-weight: bold;")
+            logger.error(f"Error loading vector search engine: {e}")
             
     def update_database_status(self):
         """Update database status display"""
@@ -301,19 +312,36 @@ schemas, and metadata rather than full content. This provides faster indexing an
             return
             
         try:
-            docs = self.vector_engine.get_indexed_documents()
-            doc_count = len(docs)
+            # Get comprehensive database statistics
+            stats = self.vector_engine.get_index_stats()
+            doc_count = stats.get('document_count', 0)
+            chunk_count = stats.get('chunk_count', 0)
+            embedding_count = stats.get('embedding_count', 0)
+            db_size = stats.get('database_size_bytes', 0)
             
             if doc_count > 0:
-                self.db_status_label.setText(f"✅ {doc_count} documents indexed and ready for search")
+                # Format database size
+                if db_size > 1024 * 1024:
+                    size_str = f"{db_size / (1024 * 1024):.1f} MB"
+                elif db_size > 1024:
+                    size_str = f"{db_size / 1024:.1f} KB"
+                else:
+                    size_str = f"{db_size} bytes"
+                
+                status_text = f"✅ Vector database loaded: {doc_count} documents, {chunk_count} chunks, {embedding_count} embeddings ({size_str})"
+                self.db_status_label.setText(status_text)
                 self.db_status_label.setStyleSheet("color: #28a745; font-weight: bold;")
+                
+                # Log the successful load
+                logger.info(f"Vector database loaded successfully: {doc_count} documents, {chunk_count} chunks")
             else:
-                self.db_status_label.setText("📚 No documents indexed yet - click 'Rebuild Index' to get started")
+                self.db_status_label.setText("📚 Vector database is empty - click 'Rebuild Index' to index your data")
                 self.db_status_label.setStyleSheet("color: #ffc107; font-weight: bold;")
                 
         except Exception as e:
-            self.db_status_label.setText(f"❌ Status error: {str(e)}")
+            self.db_status_label.setText(f"❌ Database status error: {str(e)}")
             self.db_status_label.setStyleSheet("color: #dc3545;")
+            logger.error(f"Error updating database status: {e}")
             
     def rebuild_vector_index(self):
         """Rebuild the entire vector search index with all data sources"""
