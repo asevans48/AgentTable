@@ -631,14 +631,28 @@ class FileBrowser(QWidget):
         
     def setup_connections(self):
         """Setup signal-slot connections"""
-        self.filter_input.textChanged.connect(self.apply_filter)
-        self.type_filter.currentTextChanged.connect(self.apply_filter)
+        self.filter_input.textChanged.connect(self.apply_filters)
+        self.type_filter.currentTextChanged.connect(self.apply_filters)
+        self.metadata_filter.currentTextChanged.connect(self.apply_filters)
+
+        # File selection connections
         self.file_tree.clicked.connect(self.on_file_clicked)
         self.file_tree.doubleClicked.connect(self.on_file_double_clicked)
-        
-        # Setup context menu
+        self.file_list.itemClicked.connect(self.on_file_list_clicked)
+        self.file_list.itemDoubleClicked.connect(self.on_file_list_double_clicked)
+
+        # Directory tree connections
+        self.directory_tree.clicked.connect(self.on_directory_clicked)
+
+        # Context menus
         self.file_tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.file_tree.customContextMenuRequested.connect(self.show_context_menu)
+        self.file_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.file_list.customContextMenuRequested.connect(self.show_context_menu)
+
+        # File watcher
+        self.file_watcher.directoryChanged.connect(self.on_directory_changed)
+        self.file_watcher.fileChanged.connect(self.on_file_changed)
         
     def load_watched_directories(self):
         """Load watched directories from config and populate directory tree"""
