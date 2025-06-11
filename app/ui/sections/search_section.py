@@ -1118,6 +1118,22 @@ class SearchSection(QWidget):
         refresh_btn.clicked.connect(self.refresh_indices)
         header_layout.addWidget(refresh_btn)
         
+        rebuild_btn = QPushButton("🔄 Rebuild Vector DB")
+        rebuild_btn.setToolTip("Rebuild the entire vector search database")
+        rebuild_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #dc3545;
+                color: white;
+                border: none;
+                padding: 6px 12px;
+                border-radius: 4px;
+                font-weight: bold;
+            }
+            QPushButton:hover { background-color: #c82333; }
+        """)
+        rebuild_btn.clicked.connect(self.rebuild_vector_database)
+        header_layout.addWidget(rebuild_btn)
+        
         layout.addLayout(header_layout)
         
         # Vector Search interface (no tabs needed since it's just one function)
@@ -1133,8 +1149,16 @@ class SearchSection(QWidget):
     def refresh_indices(self):
         """Refresh search indices"""
         logger.info("Refreshing search indices")
-        # Placeholder implementation
-        # This would trigger re-indexing of documents and vector embeddings
+        # Trigger refresh of the vector search tab
+        if hasattr(self.vector_tab, 'update_database_status'):
+            self.vector_tab.update_database_status()
+            
+    def rebuild_vector_database(self):
+        """Rebuild the entire vector search database"""
+        logger.info("Rebuilding vector search database")
+        # Trigger the rebuild process in the vector search tab
+        if hasattr(self.vector_tab, 'rebuild_vector_index'):
+            self.vector_tab.rebuild_vector_index()
         
     def handle_search_query(self, query: str, search_type: str):
         """Handle search query from main search bar"""

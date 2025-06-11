@@ -452,6 +452,12 @@ class MainWindow(QMainWindow):
         
         tools_menu.addSeparator()
         
+        rebuild_vector_action = QAction("Rebuild Vector Database", self)
+        rebuild_vector_action.triggered.connect(self.rebuild_vector_database)
+        tools_menu.addAction(rebuild_vector_action)
+        
+        tools_menu.addSeparator()
+        
         cloud_auth_action = QAction("Cloud Authentication", self)
         cloud_auth_action.triggered.connect(self.show_cloud_auth)
         tools_menu.addAction(cloud_auth_action)
@@ -545,6 +551,62 @@ class MainWindow(QMainWindow):
         self.file_browser.refresh()
         self.dataset_browser.refresh()
         self.status_bar.showMessage("Data refreshed")
+        
+    def rebuild_vector_database(self):
+        """Rebuild the vector search database"""
+        from PyQt6.QtWidgets import QMessageBox
+        
+        reply = QMessageBox.question(
+            self,
+            "Rebuild Vector Database",
+            "This will rebuild the entire vector search database.\n\n"
+            "This may take several minutes depending on the amount of data.\n\n"
+            "Continue?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes
+        )
+        
+        if reply == QMessageBox.StandardButton.Yes:
+            # Access the search results widget and trigger rebuild
+            if hasattr(self.search_results, 'vector_engine'):
+                try:
+                    # Get watched directories for rebuilding
+                    watched_dirs = self.config_manager.get("file_management.watched_directories", [])
+                    if watched_dirs:
+                        # Start rebuild process
+                        self.status_bar.showMessage("Rebuilding vector database...")
+                        
+                        # Use the vector search engine to rebuild
+                        from utils.vector_search import VectorSearchEngine
+                        vector_engine = VectorSearchEngine(self.config_manager)
+                        results = vector_engine.rebuild_index(watched_dirs)
+                        
+                        # Show results
+                        indexed_files = results.get('indexed_files', 0)
+                        total_files = results.get('total_files', 0)
+                        
+                        QMessageBox.information(
+                            self,
+                            "Rebuild Complete",
+                            f"Vector database rebuilt successfully!\n\n"
+                            f"Indexed {indexed_files} out of {total_files} files."
+                        )
+                        
+                        self.status_bar.showMessage(f"Vector database rebuilt: {indexed_files}/{total_files} files indexed")
+                    else:
+                        QMessageBox.warning(
+                            self,
+                            "No Data Sources",
+                            "No watched directories found.\n\n"
+                            "Please add some directories in the Files tab first."
+                        )
+                except Exception as e:
+                    QMessageBox.critical(
+                        self,
+                        "Rebuild Failed",
+                        f"Failed to rebuild vector database:\n\n{str(e)}"
+                    )
+                    self.status_bar.showMessage("Vector database rebuild failed")
     
     def show_change_password(self):
         """Show change password dialog"""
