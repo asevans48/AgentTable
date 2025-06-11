@@ -414,6 +414,12 @@ class FileBrowser(QWidget):
             if path:
                 self.current_directory = path
                 
+                # Debug: Check if we have files for this directory
+                matching_files = [f for f in self.indexed_files if str(Path(f['path']).parent) == path]
+                print(f"DEBUG: Selected directory: {path}")
+                print(f"DEBUG: Found {len(matching_files)} files in this directory")
+                print(f"DEBUG: Total indexed files: {len(self.indexed_files)}")
+                
                 # Filter files to show only those in the selected directory
                 self.apply_filters()
                 
@@ -489,6 +495,12 @@ class FileBrowser(QWidget):
         self.file_model.setHorizontalHeaderLabels(['Files'])
         
         filtered_files = []
+        
+        # Debug information
+        if self.current_directory:
+            print(f"DEBUG: Applying filters for directory: {self.current_directory}")
+            print(f"DEBUG: Total indexed files: {len(self.indexed_files)}")
+        
         for file_info in self.indexed_files:
             if self.passes_filter(file_info):
                 self.add_file_to_model(file_info)
@@ -497,6 +509,12 @@ class FileBrowser(QWidget):
         # Update file count
         visible_count = len(filtered_files)
         self.file_count_label.setText(str(visible_count))
+        
+        # Debug: Show what files were found
+        if self.current_directory:
+            print(f"DEBUG: Found {visible_count} files after filtering")
+            for f in filtered_files[:5]:  # Show first 5 files
+                print(f"DEBUG: File: {f['name']} in {Path(f['path']).parent}")
         
         # Update status
         if self.current_directory:
@@ -588,8 +606,14 @@ class FileBrowser(QWidget):
         # Directory filter - show files in the selected directory
         if self.current_directory:
             file_dir = str(Path(file_info['path']).parent)
+            current_dir = str(Path(self.current_directory))
+            
+            # Normalize paths for comparison (handle different path separators)
+            file_dir = Path(file_dir).resolve()
+            current_dir = Path(current_dir).resolve()
+            
             # Check if file is directly in the selected directory (not subdirectories)
-            if file_dir != self.current_directory:
+            if file_dir != current_dir:
                 return False
         
         # Text filter
