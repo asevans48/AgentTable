@@ -11,12 +11,16 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTreeView, QLabel, 
     QPushButton, QLineEdit, QComboBox, QMenu, QMessageBox,
     QFileDialog, QFrame, QProgressBar, QDialog, QFormLayout, QTextEdit,
-    QListWidget, QListWidgetItem, QSplitter, QGroupBox, QCheckBox, QTabWidget
+    QListWidget, QListWidgetItem, QSplitter, QGroupBox, QCheckBox, QTabWidget,
+    QHeaderView, QAbstractItemView
 )
 from PyQt6.QtCore import (
-    Qt, pyqtSignal, QModelIndex, QThread, QFileSystemWatcher
+    Qt, pyqtSignal, QModelIndex, QThread, QFileSystemWatcher, QDir, QFileInfo
 )
-from PyQt6.QtGui import QFont, QAction, QStandardItemModel, QStandardItem, QIcon, QPixmap, QPainter, QColor
+from PyQt6.QtGui import (
+    QFont, QAction, QStandardItemModel, QStandardItem, QIcon, QPixmap, QPainter, QColor,
+    QFileSystemModel
+)
 from typing import Dict, Any
 
 import logging
@@ -168,7 +172,7 @@ class FileMetadataManager:
             self.save_metadata()
 
 class FileBrowser(QWidget):
-    """File browser widget for showing and managing files with folder-like interface"""
+    """File browser widget with proper file system navigation"""
     
     file_selected = pyqtSignal(str)  # file_path
     file_double_clicked = pyqtSignal(str)  # file_path
@@ -179,42 +183,61 @@ class FileBrowser(QWidget):
         super().__init__(parent)
         self.config_manager = config_manager
         self.metadata_manager = FileMetadataManager(config_manager)
-        self.indexed_files = []
-        self.current_filter = ""
-        self.indexer_worker = None
         self.file_watcher = QFileSystemWatcher()
+        
+        # File system models
+        self.dir_model = QFileSystemModel()
+        self.file_model = QFileSystemModel()
+        
+        # Current state
         self.current_directory = None
+        self.watched_directories = []
         
         self.setup_ui()
         self.setup_connections()
+        self.setup_file_system_models()
         self.load_watched_directories()
         
     def setup_ui(self):
-        """Setup the file browser UI with folder-like interface"""
+        """Setup the file browser UI like a real file system browser"""
         layout = QVBoxLayout(self)
         layout.setContentsMargins(5, 5, 5, 5)
         
-        # Header with controls
+        # Header with navigation and controls
         header_layout = QVBoxLayout()
         
-        # Title and controls
+        # Title and main controls
         title_layout = QHBoxLayout()
         
-        title_label = QLabel("Files")
+        title_label = QLabel("File Browser")
         title_label.setFont(QFont("Arial", 12, QFont.Weight.Bold))
         title_layout.addWidget(title_label)
         
         title_layout.addStretch()
         
-        # View mode toggle
-        self.view_mode = QComboBox()
-        self.view_mode.addItems(["List View", "Folder View"])
-        self.view_mode.setCurrentText("Folder View")
-        self.view_mode.currentTextChanged.connect(self.change_view_mode)
-        title_layout.addWidget(self.view_mode)
+        # Navigation buttons
+        self.back_button = QPushButton("◀ Back")
+        self.back_button.setEnabled(False)
+        self.back_button.setToolTip("Go back")
+        title_layout.addWidget(self.back_button)
         
+        self.forward_button = QPushButton("▶ Forward")
+        self.forward_button.setEnabled(False)
+        self.forward_button.setToolTip("Go forward")
+        title_layout.addWidget(self.forward_button)
+        
+        self.up_button = QPushButton("⬆ Up")
+        self.up_button.setEnabled(False)
+        self.up_button.setToolTip("Go to parent directory")
+        title_layout.addWidget(self.up_button)
+        
+        self.home_button = QPushButton("🏠 Home")
+        self.home_button.setToolTip("Go to home directory")
+        title_layout.addWidget(self.home_button)
+        
+        # Add watched directory button
         add_dir_button = QPushButton("+ Add Directory")
-        add_dir_button.setToolTip("Add directory to watch")
+        add_dir_button.setToolTip("Add directory to watch list")
         add_dir_button.setStyleSheet("""
             QPushButton {
                 background-color: #28a745;
@@ -233,25 +256,34 @@ class FileBrowser(QWidget):
         
         header_layout.addLayout(title_layout)
         
-        # Navigation breadcrumb
-        self.breadcrumb_layout = QHBoxLayout()
-        self.breadcrumb_frame = QFrame()
-        self.breadcrumb_frame.setLayout(self.breadcrumb_layout)
-        self.breadcrumb_frame.setStyleSheet("""
-            QFrame {
-                background-color: #f8f9fa;
-                border: 1px solid #dee2e6;
+        # Address bar
+        address_layout = QHBoxLayout()
+        address_layout.addWidget(QLabel("Location:"))
+        
+        self.address_bar = QLineEdit()
+        self.address_bar.setPlaceholderText("Enter path or select from tree...")
+        self.address_bar.setStyleSheet("""
+            QLineEdit {
+                padding: 6px;
+                border: 1px solid #ddd;
                 border-radius: 4px;
-                padding: 4px;
+                font-family: 'Consolas', monospace;
+                font-size: 9pt;
             }
         """)
-        header_layout.addWidget(self.breadcrumb_frame)
+        address_layout.addWidget(self.address_bar)
         
-        # Search and filter
+        self.go_button = QPushButton("Go")
+        self.go_button.setToolTip("Navigate to address")
+        address_layout.addWidget(self.go_button)
+        
+        header_layout.addLayout(address_layout)
+        
+        # Search and filter bar
         filter_layout = QHBoxLayout()
         
         self.filter_input = QLineEdit()
-        self.filter_input.setPlaceholderText("Search files...")
+        self.filter_input.setPlaceholderText("Search files and folders...")
         self.filter_input.setStyleSheet("""
             QLineEdit {
                 padding: 4px;
@@ -263,114 +295,129 @@ class FileBrowser(QWidget):
         filter_layout.addWidget(self.filter_input)
         
         self.type_filter = QComboBox()
-        self.type_filter.addItems(["All Types", ".pdf", ".docx", ".xlsx", ".csv", ".json", ".txt", ".py", ".md"])
+        self.type_filter.addItems(["All Files", "Documents", "Images", "Code", "Data", "Archives"])
         self.type_filter.setStyleSheet("font-size: 9pt;")
         filter_layout.addWidget(self.type_filter)
         
-        self.metadata_filter = QComboBox()
-        self.metadata_filter.addItems(["All Files", "With Metadata", "Without Metadata", "Vector Indexed"])
-        self.metadata_filter.setStyleSheet("font-size: 9pt;")
-        filter_layout.addWidget(self.metadata_filter)
+        self.show_hidden = QCheckBox("Show Hidden")
+        self.show_hidden.setToolTip("Show hidden files and folders")
+        filter_layout.addWidget(self.show_hidden)
         
         header_layout.addLayout(filter_layout)
         
         layout.addLayout(header_layout)
         
-        # Indexing progress
-        self.progress_frame = QFrame()
-        self.progress_frame.setVisible(False)
-        progress_layout = QVBoxLayout(self.progress_frame)
-        
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setStyleSheet("""
-            QProgressBar {
-                border: 1px solid #ddd;
-                border-radius: 4px;
-                text-align: center;
-                height: 16px;
-            }
-            QProgressBar::chunk {
-                background-color: #007bff;
-                border-radius: 3px;
-            }
-        """)
-        progress_layout.addWidget(self.progress_bar)
-        
-        self.progress_label = QLabel("Indexing files...")
-        self.progress_label.setStyleSheet("font-size: 8pt; color: #666;")
-        progress_layout.addWidget(self.progress_label)
-        
-        layout.addWidget(self.progress_frame)
-        
-        # Main content area with splitter
+        # Main browser area with splitter
         main_splitter = QSplitter(Qt.Orientation.Horizontal)
         
-        # Left side: Directory tree and file list
-        left_widget = QWidget()
-        left_layout = QVBoxLayout(left_widget)
+        # Left panel: Directory tree
+        left_panel = QFrame()
+        left_panel.setMaximumWidth(300)
+        left_panel.setMinimumWidth(200)
+        left_layout = QVBoxLayout(left_panel)
         left_layout.setContentsMargins(0, 0, 0, 0)
         
-        # Directory tree
-        self.directory_tree = QTreeView()
-        self.directory_model = QStandardItemModel()
-        self.directory_model.setHorizontalHeaderLabels(['Watched Directories'])
-        self.directory_tree.setModel(self.directory_model)
-        self.directory_tree.setMaximumHeight(150)
-        self.directory_tree.setStyleSheet("""
+        # Watched directories section
+        watched_label = QLabel("Watched Directories")
+        watched_label.setFont(QFont("Arial", 10, QFont.Weight.Bold))
+        watched_label.setStyleSheet("padding: 4px; background-color: #f0f0f0; border-radius: 3px;")
+        left_layout.addWidget(watched_label)
+        
+        self.watched_tree = QTreeView()
+        self.watched_tree.setMaximumHeight(120)
+        self.watched_tree.setHeaderHidden(True)
+        self.watched_tree.setStyleSheet("""
             QTreeView {
                 border: 1px solid #ddd;
                 border-radius: 4px;
                 background-color: #f8f9fa;
             }
+            QTreeView::item {
+                padding: 4px;
+            }
+            QTreeView::item:hover {
+                background-color: #e9ecef;
+            }
+            QTreeView::item:selected {
+                background-color: #007bff;
+                color: white;
+            }
+        """)
+        left_layout.addWidget(self.watched_tree)
+        
+        # Directory tree section
+        tree_label = QLabel("Directory Tree")
+        tree_label.setFont(QFont("Arial", 10, QFont.Weight.Bold))
+        tree_label.setStyleSheet("padding: 4px; background-color: #f0f0f0; border-radius: 3px; margin-top: 8px;")
+        left_layout.addWidget(tree_label)
+        
+        self.directory_tree = QTreeView()
+        self.directory_tree.setHeaderHidden(True)
+        self.directory_tree.setStyleSheet("""
+            QTreeView {
+                border: 1px solid #ddd;
+                border-radius: 4px;
+                background-color: white;
+            }
+            QTreeView::item {
+                padding: 3px;
+            }
+            QTreeView::item:hover {
+                background-color: #f5f5f5;
+            }
+            QTreeView::item:selected {
+                background-color: #007bff;
+                color: white;
+            }
         """)
         left_layout.addWidget(self.directory_tree)
         
-        # File list/grid
-        self.file_container = QWidget()
-        self.setup_file_views()
-        left_layout.addWidget(self.file_container)
+        main_splitter.addWidget(left_panel)
         
-        main_splitter.addWidget(left_widget)
+        # Center panel: File list
+        center_panel = QFrame()
+        center_layout = QVBoxLayout(center_panel)
+        center_layout.setContentsMargins(0, 0, 0, 0)
         
-        # Right side: File details and metadata
-        self.details_panel = self.create_details_panel()
-        main_splitter.addWidget(self.details_panel)
+        # View controls
+        view_controls = QHBoxLayout()
         
-        # Set splitter proportions
-        main_splitter.setSizes([400, 300])
+        self.view_mode = QComboBox()
+        self.view_mode.addItems(["Details", "List", "Icons"])
+        self.view_mode.setCurrentText("Details")
+        view_controls.addWidget(QLabel("View:"))
+        view_controls.addWidget(self.view_mode)
         
-        layout.addWidget(main_splitter)
+        view_controls.addStretch()
         
-        # Status label
-        self.status_label = QLabel("No directories being watched")
-        self.status_label.setStyleSheet("font-size: 8pt; color: #666; padding: 4px;")
-        layout.addWidget(self.status_label)
+        self.sort_combo = QComboBox()
+        self.sort_combo.addItems(["Name", "Size", "Type", "Date Modified"])
+        view_controls.addWidget(QLabel("Sort by:"))
+        view_controls.addWidget(self.sort_combo)
         
-    def setup_file_views(self):
-        """Setup both list and folder view for files"""
-        container_layout = QVBoxLayout(self.file_container)
-        container_layout.setContentsMargins(0, 0, 0, 0)
+        self.sort_order = QComboBox()
+        self.sort_order.addItems(["Ascending", "Descending"])
+        view_controls.addWidget(self.sort_order)
         
-        # List view (tree view)
-        self.file_model = QStandardItemModel()
-        self.file_model.setHorizontalHeaderLabels(['Name', 'Type', 'Size', 'Tags'])
+        center_layout.addLayout(view_controls)
         
-        self.file_tree = QTreeView()
-        self.file_tree.setModel(self.file_model)
-        self.file_tree.setAlternatingRowColors(True)
-        self.file_tree.setSortingEnabled(True)
-        self.file_tree.setRootIsDecorated(False)
-        self.file_tree.setUniformRowHeights(True)
-        self.file_tree.setStyleSheet("""
+        # File list view
+        self.file_list = QTreeView()
+        self.file_list.setAlternatingRowColors(True)
+        self.file_list.setSortingEnabled(True)
+        self.file_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        self.file_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.file_list.setStyleSheet("""
             QTreeView {
                 border: 1px solid #ddd;
                 border-radius: 4px;
                 background-color: white;
                 selection-background-color: #e3f2fd;
+                gridline-color: #f0f0f0;
             }
             QTreeView::item {
-                padding: 6px;
-                border-bottom: 1px solid #f0f0f0;
+                padding: 4px;
+                border-bottom: 1px solid #f8f9fa;
             }
             QTreeView::item:hover {
                 background-color: #f5f5f5;
@@ -380,47 +427,205 @@ class FileBrowser(QWidget):
                 color: black;
             }
         """)
+        center_layout.addWidget(self.file_list)
         
-        # Set column widths
-        self.file_tree.setColumnWidth(0, 200)  # Name
-        self.file_tree.setColumnWidth(1, 60)   # Type
-        self.file_tree.setColumnWidth(2, 80)   # Size
-        self.file_tree.setColumnWidth(3, 120)  # Tags
+        main_splitter.addWidget(center_panel)
         
-        # Folder view (list widget with icons)
-        self.file_list = QListWidget()
-        self.file_list.setViewMode(QListWidget.ViewMode.IconMode)
-        from PyQt6.QtCore import QSize
-        self.file_list.setIconSize(QSize(48, 48))
-        self.file_list.setGridSize(QSize(80, 100))
-        self.file_list.setResizeMode(QListWidget.ResizeMode.Adjust)
-        self.file_list.setStyleSheet("""
-            QListWidget {
-                border: 1px solid #ddd;
-                border-radius: 4px;
-                background-color: white;
-                selection-background-color: #e3f2fd;
-            }
-            QListWidget::item {
-                padding: 8px;
-                border-radius: 4px;
-                margin: 2px;
-            }
-            QListWidget::item:hover {
-                background-color: #f5f5f5;
-            }
-            QListWidget::item:selected {
-                background-color: #e3f2fd;
-                color: black;
-            }
-        """)
+        # Right panel: File details and metadata
+        self.details_panel = self.create_details_panel()
+        main_splitter.addWidget(self.details_panel)
         
-        container_layout.addWidget(self.file_tree)
-        container_layout.addWidget(self.file_list)
+        # Set splitter proportions (tree, files, details)
+        main_splitter.setSizes([250, 500, 300])
         
-        # Initially show folder view
-        self.file_tree.setVisible(False)
-        self.file_list.setVisible(True)
+        layout.addWidget(main_splitter)
+        
+        # Status bar
+        status_layout = QHBoxLayout()
+        
+        self.status_label = QLabel("Ready")
+        self.status_label.setStyleSheet("font-size: 8pt; color: #666; padding: 4px;")
+        status_layout.addWidget(self.status_label)
+        
+        status_layout.addStretch()
+        
+        self.selection_label = QLabel("")
+        self.selection_label.setStyleSheet("font-size: 8pt; color: #666; padding: 4px;")
+        status_layout.addWidget(self.selection_label)
+        
+        layout.addLayout(status_layout)
+        
+    def go_back(self):
+        """Go back in navigation history"""
+        # TODO: Implement navigation history
+        pass
+        
+    def go_forward(self):
+        """Go forward in navigation history"""
+        # TODO: Implement navigation history
+        pass
+        
+    def go_up(self):
+        """Go to parent directory"""
+        if self.current_directory:
+            parent = str(Path(self.current_directory).parent)
+            if parent != self.current_directory:
+                self.navigate_to_directory(parent)
+                
+    def go_home(self):
+        """Go to home directory"""
+        self.navigate_to_directory(str(Path.home()))
+        
+    def navigate_to_address(self):
+        """Navigate to the address in the address bar"""
+        path = self.address_bar.text().strip()
+        if path and Path(path).exists():
+            self.navigate_to_directory(path)
+        else:
+            QMessageBox.warning(self, "Invalid Path", f"The path '{path}' does not exist.")
+            
+    def toggle_hidden_files(self, show_hidden):
+        """Toggle display of hidden files"""
+        if show_hidden:
+            self.file_model.setFilter(QDir.Filter.AllEntries)
+            self.dir_model.setFilter(QDir.Filter.Dirs | QDir.Filter.Hidden)
+        else:
+            self.file_model.setFilter(QDir.Filter.AllEntries | QDir.Filter.NoDotAndDotDot)
+            self.dir_model.setFilter(QDir.Filter.Dirs | QDir.Filter.NoDotAndDotDot)
+            
+    def change_view_mode(self, mode):
+        """Change file list view mode"""
+        # TODO: Implement different view modes (Details, List, Icons)
+        pass
+        
+    def change_sort(self):
+        """Change file list sorting"""
+        sort_column = self.sort_combo.currentIndex()
+        sort_order = Qt.SortOrder.AscendingOrder if self.sort_order.currentText() == "Ascending" else Qt.SortOrder.DescendingOrder
+        self.file_list.sortByColumn(sort_column, sort_order)
+        
+    def on_directory_tree_clicked(self, index):
+        """Handle directory tree clicks"""
+        if index.isValid():
+            path = self.dir_model.filePath(index)
+            self.navigate_to_directory(path)
+            
+    def on_watched_directory_clicked(self, index):
+        """Handle watched directory clicks"""
+        if index.isValid():
+            item = self.watched_model.itemFromIndex(index)
+            path = item.data(Qt.ItemDataRole.UserRole)
+            if path:
+                self.navigate_to_directory(path)
+                
+    def on_file_clicked(self, index):
+        """Handle file clicks"""
+        if index.isValid():
+            file_info = self.file_model.fileInfo(index)
+            if file_info.isDir():
+                # Double-click to enter directory, single click to select
+                return
+            else:
+                # Show file details
+                self.show_file_details(file_info.absoluteFilePath())
+                self.file_selected.emit(file_info.absoluteFilePath())
+                
+    def on_file_double_clicked(self, index):
+        """Handle file double-clicks"""
+        if index.isValid():
+            file_info = self.file_model.fileInfo(index)
+            if file_info.isDir():
+                # Navigate into directory
+                self.navigate_to_directory(file_info.absoluteFilePath())
+            else:
+                # Open file
+                self.open_file(file_info.absoluteFilePath())
+                self.file_double_clicked.emit(file_info.absoluteFilePath())
+                
+    def on_selection_changed(self, selected, deselected):
+        """Handle selection changes"""
+        indexes = self.file_list.selectionModel().selectedIndexes()
+        if indexes:
+            # Show count of selected items
+            selected_count = len(set(index.row() for index in indexes))
+            if selected_count == 1:
+                file_info = self.file_model.fileInfo(indexes[0])
+                self.selection_label.setText(f"Selected: {file_info.fileName()}")
+            else:
+                self.selection_label.setText(f"Selected: {selected_count} items")
+        else:
+            self.selection_label.setText("")
+            
+    def update_status(self):
+        """Update status bar with current directory info"""
+        if self.current_directory:
+            dir_path = Path(self.current_directory)
+            try:
+                # Count items in current directory
+                items = list(dir_path.iterdir())
+                file_count = sum(1 for item in items if item.is_file())
+                dir_count = sum(1 for item in items if item.is_dir())
+                
+                status_parts = []
+                if dir_count > 0:
+                    status_parts.append(f"{dir_count} folders")
+                if file_count > 0:
+                    status_parts.append(f"{file_count} files")
+                    
+                if status_parts:
+                    self.status_label.setText(f"{dir_path.name}: {', '.join(status_parts)}")
+                else:
+                    self.status_label.setText(f"{dir_path.name}: Empty")
+                    
+            except PermissionError:
+                self.status_label.setText(f"{dir_path.name}: Access denied")
+            except Exception as e:
+                self.status_label.setText(f"{dir_path.name}: Error - {str(e)}")
+        else:
+            self.status_label.setText("No directory selected")
+            
+    def apply_filters(self):
+        """Apply current filters to file list"""
+        filter_text = self.filter_input.text().strip()
+        
+        if filter_text:
+            # Set name filter
+            self.file_model.setNameFilters([f"*{filter_text}*"])
+            self.file_model.setNameFilterDisables(False)
+        else:
+            # Clear name filter
+            self.file_model.setNameFilters([])
+            
+        # TODO: Implement type filtering based on type_filter combo
+        
+    def setup_file_system_models(self):
+        """Setup file system models for directory tree and file list"""
+        # Directory model - shows only directories
+        self.dir_model.setRootPath("")
+        self.dir_model.setFilter(QDir.Filter.Dirs | QDir.Filter.NoDotAndDotDot)
+        
+        # File model - shows files and directories
+        self.file_model.setRootPath("")
+        self.file_model.setFilter(QDir.Filter.AllEntries | QDir.Filter.NoDotAndDotDot)
+        
+        # Set models to views
+        self.directory_tree.setModel(self.dir_model)
+        self.file_list.setModel(self.file_model)
+        
+        # Hide extra columns in directory tree (only show name)
+        for i in range(1, self.dir_model.columnCount()):
+            self.directory_tree.hideColumn(i)
+            
+        # Configure file list columns
+        header = self.file_list.header()
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)  # Name
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)  # Size
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)  # Type
+        header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)  # Date
+        
+        # Set initial directory to user's home
+        home_path = str(Path.home())
+        self.navigate_to_directory(home_path)
         
     def create_details_panel(self):
         """Create the file details and metadata panel"""
@@ -579,126 +784,97 @@ class FileBrowser(QWidget):
         
         return widget
         
-    def change_view_mode(self, mode):
-        """Change between list and folder view"""
-        if mode == "List View":
-            self.file_tree.setVisible(True)
-            self.file_list.setVisible(False)
-        else:  # Folder View
-            self.file_tree.setVisible(False)
-            self.file_list.setVisible(True)
-            
-    def update_breadcrumb(self, path=None):
-        """Update the breadcrumb navigation"""
-        # Clear existing breadcrumb
-        while self.breadcrumb_layout.count():
-            child = self.breadcrumb_layout.takeAt(0)
-            if child.widget():
-                child.widget().deleteLater()
-                
-        if path:
-            from pathlib import Path
-            path_obj = Path(path)
-            
-            # Add home button
-            home_btn = QPushButton("📁 Watched Directories")
-            home_btn.setFlat(True)
-            home_btn.clicked.connect(lambda: self.navigate_to_directory(None))
-            self.breadcrumb_layout.addWidget(home_btn)
-            
-            # Add separator
-            sep_label = QLabel(" > ")
-            sep_label.setStyleSheet("color: #666;")
-            self.breadcrumb_layout.addWidget(sep_label)
-            
-            # Add current directory
-            dir_btn = QPushButton(f"📂 {path_obj.name}")
-            dir_btn.setFlat(True)
-            dir_btn.setStyleSheet("font-weight: bold;")
-            self.breadcrumb_layout.addWidget(dir_btn)
-            
-        else:
-            # Show watched directories
-            home_label = QLabel("📁 All Watched Directories")
-            home_label.setStyleSheet("font-weight: bold; color: #333;")
-            self.breadcrumb_layout.addWidget(home_label)
-            
-        self.breadcrumb_layout.addStretch()
         
     def navigate_to_directory(self, directory_path):
         """Navigate to a specific directory"""
+        if not directory_path or not Path(directory_path).exists():
+            return
+            
         self.current_directory = directory_path
-        self.update_breadcrumb(directory_path)
         
-        # Clear current file display
-        self.file_model.clear()
-        self.file_model.setHorizontalHeaderLabels(['Name', 'Type', 'Size', 'Tags'])
-        self.file_list.clear()
+        # Update address bar
+        self.address_bar.setText(directory_path)
         
-        # Filter and display files for the selected directory
+        # Set root path for file list
+        index = self.file_model.setRootPath(directory_path)
+        self.file_list.setRootIndex(index)
+        
+        # Expand directory tree to show current location
+        dir_index = self.dir_model.index(directory_path)
+        if dir_index.isValid():
+            self.directory_tree.setCurrentIndex(dir_index)
+            self.directory_tree.scrollTo(dir_index)
+            
+        # Update navigation buttons
+        self.up_button.setEnabled(Path(directory_path).parent != Path(directory_path))
+        
+        # Apply current filters
         self.apply_filters()
         
         # Update status
-        if directory_path:
-            dir_name = Path(directory_path).name
-            file_count = len([f for f in self.indexed_files if f['path'].startswith(directory_path)])
-            self.status_label.setText(f"Showing {file_count} files in {dir_name}")
-        else:
-            total_files = len(self.indexed_files)
-            self.status_label.setText(f"Showing {total_files} files in all watched directories")
+        self.update_status()
         
     def setup_connections(self):
         """Setup signal-slot connections"""
+        # Navigation buttons
+        self.back_button.clicked.connect(self.go_back)
+        self.forward_button.clicked.connect(self.go_forward)
+        self.up_button.clicked.connect(self.go_up)
+        self.home_button.clicked.connect(self.go_home)
+        self.go_button.clicked.connect(self.navigate_to_address)
+        
+        # Address bar
+        self.address_bar.returnPressed.connect(self.navigate_to_address)
+        
+        # Filters and search
         self.filter_input.textChanged.connect(self.apply_filters)
         self.type_filter.currentTextChanged.connect(self.apply_filters)
-        self.metadata_filter.currentTextChanged.connect(self.apply_filters)
-
-        # File selection connections
-        self.file_tree.clicked.connect(self.on_file_clicked)
-        self.file_tree.doubleClicked.connect(self.on_file_double_clicked)
-        self.file_list.itemClicked.connect(self.on_file_list_clicked)
-        self.file_list.itemDoubleClicked.connect(self.on_file_list_double_clicked)
-
-        # Directory tree connections
-        self.directory_tree.clicked.connect(self.on_directory_clicked)
-
+        self.show_hidden.toggled.connect(self.toggle_hidden_files)
+        
+        # View controls
+        self.view_mode.currentTextChanged.connect(self.change_view_mode)
+        self.sort_combo.currentTextChanged.connect(self.change_sort)
+        self.sort_order.currentTextChanged.connect(self.change_sort)
+        
+        # Tree and file list connections
+        self.directory_tree.clicked.connect(self.on_directory_tree_clicked)
+        self.file_list.clicked.connect(self.on_file_clicked)
+        self.file_list.doubleClicked.connect(self.on_file_double_clicked)
+        self.file_list.selectionModel().selectionChanged.connect(self.on_selection_changed)
+        
+        # Watched directories
+        self.watched_tree.clicked.connect(self.on_watched_directory_clicked)
+        
         # Context menus
-        self.file_tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        self.file_tree.customContextMenuRequested.connect(self.show_context_menu)
-        self.file_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.file_list.customContextMenuRequested.connect(self.show_context_menu)
-
+        
         # File watcher
         self.file_watcher.directoryChanged.connect(self.on_directory_changed)
-        self.file_watcher.fileChanged.connect(self.on_file_changed)
         
     def load_watched_directories(self):
-        """Load watched directories from config and populate directory tree"""
-        watched_dirs = self.config_manager.get("file_management.watched_directories", [])
+        """Load watched directories from config"""
+        self.watched_directories = self.config_manager.get("file_management.watched_directories", [])
         
-        # Clear directory model
-        self.directory_model.clear()
-        self.directory_model.setHorizontalHeaderLabels(['Watched Directories'])
+        # Create model for watched directories
+        self.watched_model = QStandardItemModel()
+        self.watched_tree.setModel(self.watched_model)
         
-        # Add watched directories to tree
-        for directory in watched_dirs:
+        # Populate watched directories
+        for directory in self.watched_directories:
             if Path(directory).exists():
                 dir_item = QStandardItem(f"📂 {Path(directory).name}")
                 dir_item.setData(directory, Qt.ItemDataRole.UserRole)
                 dir_item.setToolTip(directory)
-                self.directory_model.appendRow(dir_item)
+                self.watched_model.appendRow(dir_item)
                 
                 # Add to file watcher
                 self.file_watcher.addPath(directory)
         
-        if watched_dirs:
-            self.start_indexing()
-            self.status_label.setText(f"Watching {len(watched_dirs)} directories")
+        # Update status
+        if self.watched_directories:
+            self.status_label.setText(f"Watching {len(self.watched_directories)} directories")
         else:
-            self.status_label.setText("No directories being watched")
-            
-        # Update breadcrumb
-        self.update_breadcrumb()
+            self.status_label.setText("No directories being watched - add some to get started")
             
     def add_directory(self):
         """Add directory to watch list with metadata collection"""
@@ -726,164 +902,20 @@ class FileBrowser(QWidget):
                 self.directory_added.emit(directory)
                 self.start_indexing()
             
-    def start_indexing(self):
-        """Start indexing files in watched directories"""
-        watched_dirs = self.config_manager.get("file_management.watched_directories", [])
-        supported_formats = self.config_manager.get("file_management.supported_formats", [])
+    def refresh(self):
+        """Refresh the current directory view"""
+        if self.current_directory:
+            self.navigate_to_directory(self.current_directory)
+        self.update_status()
         
-        if not watched_dirs:
-            return
-            
-        # Stop existing indexer
-        if self.indexer_worker and self.indexer_worker.isRunning():
-            self.indexer_worker.stop()
-            self.indexer_worker.wait()
-            
-        # Clear existing files
-        self.file_model.clear()
-        self.file_model.setHorizontalHeaderLabels(['Name', 'Type', 'Size'])
-        self.indexed_files.clear()
+    def get_selected_file(self) -> Optional[str]:
+        """Get currently selected file path"""
+        indexes = self.file_list.selectionModel().selectedIndexes()
+        if indexes:
+            file_info = self.file_model.fileInfo(indexes[0])
+            return file_info.absoluteFilePath()
+        return None
         
-        # Show progress
-        self.progress_frame.setVisible(True)
-        self.progress_bar.setValue(0)
-        self.progress_label.setText("Starting file indexing...")
-        
-        # Start new indexer
-        self.indexer_worker = FileIndexWorker(watched_dirs, supported_formats)
-        self.indexer_worker.progress_updated.connect(self.on_indexing_progress)
-        self.indexer_worker.file_indexed.connect(self.on_file_indexed)
-        self.indexer_worker.indexing_complete.connect(self.on_indexing_complete)
-        self.indexer_worker.start()
-        
-        # Don't automatically trigger vector indexing
-        # Users must manually trigger it via the search section
-        
-    def start_indexing_with_metadata(self, metadata: Dict[str, Any]):
-        """Start indexing with specific metadata for new directory"""
-        # Store metadata for potential vector indexing
-        self.pending_metadata = metadata
-        self.start_indexing()
-        
-        # Show message about vector indexing
-        from PyQt6.QtWidgets import QMessageBox
-        QMessageBox.information(
-            self,
-            "Directory Added",
-            f"Directory '{metadata.get('fileset_name', 'Unknown')}' has been added to the file browser.\n\n"
-            "To enable vector search for this directory, go to the Search section and click 'Rebuild Index'."
-        )
-        
-    def trigger_vector_indexing(self):
-        """Show message about manual vector indexing"""
-        from PyQt6.QtWidgets import QMessageBox
-        
-        watched_dirs = self.config_manager.get("file_management.watched_directories", [])
-        if watched_dirs:
-            QMessageBox.information(
-                self,
-                "Vector Search Indexing",
-                f"Found {len(watched_dirs)} watched directories.\n\n"
-                "To enable vector search for these directories, go to the Search section and click 'Rebuild Index'.\n\n"
-                "This allows you to control when the potentially time-consuming indexing process runs."
-            )
-            
-    def on_vector_progress(self, status: str):
-        """Handle vector indexing progress"""
-        self.status_label.setText(f"Vector indexing: {status}")
-        
-    def on_vector_complete(self, results: Dict[str, Any]):
-        """Handle vector indexing completion"""
-        indexed_files = results.get('indexed_files', 0)
-        total_files = results.get('total_files', 0)
-        
-        if indexed_files > 0:
-            self.status_label.setText(f"Found {total_files} files, {indexed_files} indexed for vector search")
-        else:
-            self.status_label.setText(f"Found {total_files} files in watched directories")
-            
-    def on_vector_error(self, error: str):
-        """Handle vector indexing error"""
-        logger.error(f"Vector indexing error: {error}")
-        # Don't show error to user unless it's critical, just log it
-        
-    def on_indexing_progress(self, progress: int, current_file: str):
-        """Handle indexing progress updates"""
-        self.progress_bar.setValue(progress)
-        filename = Path(current_file).name
-        self.progress_label.setText(f"Indexing: {filename}")
-        
-    def on_file_indexed(self, file_info: Dict[str, Any]):
-        """Handle newly indexed file"""
-        self.indexed_files.append(file_info)
-        
-        # Add to model if it passes current filter
-        if self.passes_filter(file_info):
-            self.add_file_to_model(file_info)
-            
-    def on_indexing_complete(self, total_files: int):
-        """Handle indexing completion"""
-        self.progress_frame.setVisible(False)
-        self.status_label.setText(f"Found {total_files} files in watched directories")
-        
-        # Sort the tree
-        self.file_tree.sortByColumn(0, Qt.SortOrder.AscendingOrder)
-        
-    def add_file_to_model(self, file_info: Dict[str, Any]):
-        """Add file to both tree and list models"""
-        # Get file metadata
-        metadata = self.metadata_manager.get_file_metadata(file_info['path'])
-        
-        # Create file icon based on type
-        file_icon = self.get_file_icon(file_info['type'])
-        
-        # Add to tree view
-        name_item = QStandardItem(file_info['name'])
-        name_item.setData(file_info['path'], Qt.ItemDataRole.UserRole)
-        name_item.setIcon(file_icon)
-        
-        # Enhanced tooltip with metadata
-        tooltip_parts = [
-            f"Path: {file_info['path']}",
-            f"Type: {file_info['description']}",
-            f"Size: {self.format_file_size(file_info['size'])}"
-        ]
-        if metadata.get('description'):
-            tooltip_parts.append(f"Description: {metadata['description']}")
-        if metadata.get('tags'):
-            tooltip_parts.append(f"Tags: {', '.join(metadata['tags'])}")
-        name_item.setToolTip('\n'.join(tooltip_parts))
-        
-        # Type item
-        type_item = QStandardItem(file_info['type'])
-        
-        # Size item
-        size_item = QStandardItem(self.format_file_size(file_info['size']))
-        size_item.setData(file_info['size'], Qt.ItemDataRole.UserRole)  # Store actual size for sorting
-        
-        # Tags item
-        tags_text = ', '.join(metadata.get('tags', []))
-        tags_item = QStandardItem(tags_text)
-        
-        # Add accessibility indicator
-        if not file_info['is_accessible']:
-            name_item.setForeground(Qt.GlobalColor.red)
-            name_item.setToolTip(f"{file_info['path']}\nAccess denied")
-            
-        self.file_model.appendRow([name_item, type_item, size_item, tags_item])
-        
-        # Add to list view
-        list_item = QListWidgetItem()
-        list_item.setText(file_info['name'])
-        list_item.setIcon(file_icon)
-        list_item.setData(Qt.ItemDataRole.UserRole, file_info['path'])
-        list_item.setToolTip('\n'.join(tooltip_parts))
-        
-        # Add metadata indicators
-        if metadata.get('tags'):
-            list_item.setText(f"{file_info['name']}\n🏷️ {', '.join(metadata['tags'][:2])}")
-        
-        self.file_list.addItem(list_item)
         
     def get_file_icon(self, file_type: str):
         """Get icon for file type"""
@@ -930,115 +962,7 @@ class FileBrowser(QWidget):
         else:
             return f"{size // (1024 * 1024 * 1024)} GB"
         
-    def passes_filter(self, file_info: Dict[str, Any]) -> bool:
-        """Check if file passes current filters"""
-        # Directory filter - show files in the selected directory
-        if self.current_directory:
-            file_dir = str(Path(file_info['path']).parent)
-            # Check if file is directly in the selected directory (not subdirectories)
-            if file_dir != self.current_directory:
-                return False
-        
-        # Text filter
-        if self.current_filter:
-            search_text = f"{file_info['name']} {file_info['description']}".lower()
-            metadata = self.metadata_manager.get_file_metadata(file_info['path'])
-            if metadata.get('tags'):
-                search_text += f" {' '.join(metadata['tags'])}"
-            if metadata.get('description'):
-                search_text += f" {metadata['description']}"
-                
-            if self.current_filter.lower() not in search_text:
-                return False
-                
-        # Type filter
-        type_filter = self.type_filter.currentText()
-        if type_filter != "All Types" and file_info['type'] != type_filter:
-            return False
             
-        # Metadata filter
-        metadata_filter = self.metadata_filter.currentText()
-        if metadata_filter != "All Files":
-            metadata = self.metadata_manager.get_file_metadata(file_info['path'])
-            
-            if metadata_filter == "With Metadata":
-                if not (metadata.get('tags') or metadata.get('description') or metadata.get('category')):
-                    return False
-            elif metadata_filter == "Without Metadata":
-                if metadata.get('tags') or metadata.get('description') or metadata.get('category'):
-                    return False
-            elif metadata_filter == "Vector Indexed":
-                if not metadata.get('indexed_for_vector_search', False):
-                    return False
-            
-        return True
-        
-    def apply_filters(self):
-        """Apply current filters to file list"""
-        self.current_filter = self.filter_input.text()
-        
-        # Clear and repopulate models
-        self.file_model.clear()
-        self.file_model.setHorizontalHeaderLabels(['Name', 'Type', 'Size', 'Tags'])
-        self.file_list.clear()
-        
-        filtered_files = []
-        for file_info in self.indexed_files:
-            if self.passes_filter(file_info):
-                self.add_file_to_model(file_info)
-                filtered_files.append(file_info)
-                
-        # Update status
-        visible_count = len(filtered_files)
-        total_count = len(self.indexed_files)
-        
-        if self.current_directory:
-            dir_name = Path(self.current_directory).name
-            if visible_count != total_count:
-                self.status_label.setText(f"Showing {visible_count} of {total_count} files in {dir_name}")
-            else:
-                self.status_label.setText(f"Found {total_count} files in {dir_name}")
-        else:
-            if visible_count != total_count:
-                self.status_label.setText(f"Showing {visible_count} of {total_count} files")
-            else:
-                self.status_label.setText(f"Found {total_count} files in watched directories")
-            
-    def on_file_clicked(self, index: QModelIndex):
-        """Handle file selection in tree view"""
-        if index.isValid():
-            name_item = self.file_model.item(index.row(), 0)
-            file_path = name_item.data(Qt.ItemDataRole.UserRole)
-            self.show_file_details(file_path)
-            self.file_selected.emit(file_path)
-            
-    def on_file_double_clicked(self, index: QModelIndex):
-        """Handle file double-click in tree view"""
-        if index.isValid():
-            name_item = self.file_model.item(index.row(), 0)
-            file_path = name_item.data(Qt.ItemDataRole.UserRole)
-            self.file_double_clicked.emit(file_path)
-            
-    def on_file_list_clicked(self, item: QListWidgetItem):
-        """Handle file selection in list view"""
-        file_path = item.data(Qt.ItemDataRole.UserRole)
-        self.show_file_details(file_path)
-        self.file_selected.emit(file_path)
-        
-    def on_file_list_double_clicked(self, item: QListWidgetItem):
-        """Handle file double-click in list view"""
-        file_path = item.data(Qt.ItemDataRole.UserRole)
-        self.file_double_clicked.emit(file_path)
-        
-    def on_directory_clicked(self, index: QModelIndex):
-        """Handle directory selection"""
-        if index.isValid():
-            item = self.directory_model.itemFromIndex(index)
-            directory_path = item.data(Qt.ItemDataRole.UserRole)
-            if directory_path:
-                self.navigate_to_directory(directory_path)
-                # Force refresh to show files in the selected directory
-                self.apply_filters()
                 
     def on_directory_changed(self, path: str):
         """Handle directory changes from file watcher"""
@@ -1063,36 +987,48 @@ class FileBrowser(QWidget):
                 
     def show_file_details(self, file_path: str):
         """Show file details in the details panel"""
-        if not file_path:
+        if not file_path or not Path(file_path).exists():
             self.details_tabs.setVisible(False)
             self.no_selection_label.setVisible(True)
             return
             
-        # Find file info
-        file_info = None
-        for info in self.indexed_files:
-            if info['path'] == file_path:
-                file_info = info
-                break
-                
-        if not file_info:
-            return
-            
+        file_info = QFileInfo(file_path)
+        
         # Show details tabs
         self.details_tabs.setVisible(True)
         self.no_selection_label.setVisible(False)
         
         # Update properties tab
-        self.file_name_label.setText(file_info['name'])
-        self.file_path_label.setText(file_info['path'])
-        self.file_size_label.setText(self.format_file_size(file_info['size']))
-        self.file_type_label.setText(file_info['description'])
+        self.file_name_label.setText(file_info.fileName())
+        self.file_path_label.setText(file_info.absoluteFilePath())
+        self.file_size_label.setText(self.format_file_size(file_info.size()))
         
-        from datetime import datetime
-        modified_time = datetime.fromtimestamp(file_info['modified']).strftime('%Y-%m-%d %H:%M:%S')
+        # File type description
+        if file_info.isDir():
+            type_desc = "Folder"
+        else:
+            suffix = file_info.suffix().lower()
+            type_descriptions = {
+                '.pdf': 'PDF Document',
+                '.docx': 'Word Document', 
+                '.xlsx': 'Excel Spreadsheet',
+                '.csv': 'CSV Data File',
+                '.json': 'JSON Data File',
+                '.txt': 'Text File',
+                '.md': 'Markdown Document',
+                '.py': 'Python Script',
+                '.sql': 'SQL Script'
+            }
+            type_desc = type_descriptions.get(suffix, f'{suffix.upper()} File' if suffix else 'File')
+            
+        self.file_type_label.setText(type_desc)
+        
+        # Modified time
+        modified_time = file_info.lastModified().toString('yyyy-MM-dd hh:mm:ss')
         self.file_modified_label.setText(modified_time)
         
-        accessible_text = "Yes" if file_info['is_accessible'] else "No"
+        # Accessibility
+        accessible_text = "Yes" if file_info.isReadable() else "No"
         self.file_accessible_label.setText(accessible_text)
         
         # Update metadata tab
@@ -1131,24 +1067,15 @@ class FileBrowser(QWidget):
     def save_file_metadata(self):
         """Save metadata for the currently selected file"""
         # Get current selection
-        current_file = None
-        
-        if self.view_mode.currentText() == "List View":
-            selection = self.file_tree.selectionModel()
-            if selection.hasSelection():
-                index = selection.currentIndex()
-                if index.isValid():
-                    name_item = self.file_model.item(index.row(), 0)
-                    current_file = name_item.data(Qt.ItemDataRole.UserRole)
-        else:
-            current_item = self.file_list.currentItem()
-            if current_item:
-                current_file = current_item.data(Qt.ItemDataRole.UserRole)
-                
-        if not current_file:
+        indexes = self.file_list.selectionModel().selectedIndexes()
+        if not indexes:
             QMessageBox.warning(self, "No Selection", "Please select a file to save metadata for.")
             return
             
+        # Get the file path from the first selected item
+        file_info = self.file_model.fileInfo(indexes[0])
+        current_file = file_info.absoluteFilePath()
+        
         # Collect metadata
         tags_text = self.metadata_tags.text().strip()
         tags = [tag.strip() for tag in tags_text.split(',') if tag.strip()] if tags_text else []
@@ -1168,25 +1095,27 @@ class FileBrowser(QWidget):
         # Emit signal
         self.file_metadata_changed.emit(current_file, metadata)
         
-        # Refresh display
-        self.apply_filters()
-        
         QMessageBox.information(self, "Metadata Saved", "File metadata has been saved successfully.")
             
     def show_context_menu(self, position):
         """Show context menu for file operations"""
-        index = self.file_tree.indexAt(position)
+        index = self.file_list.indexAt(position)
         if not index.isValid():
             return
             
-        name_item = self.file_model.item(index.row(), 0)
-        file_path = name_item.data(Qt.ItemDataRole.UserRole)
+        file_info = self.file_model.fileInfo(index)
+        file_path = file_info.absoluteFilePath()
         
         menu = QMenu(self)
         
-        open_action = QAction("Open", self)
-        open_action.triggered.connect(lambda: self.open_file(file_path))
-        menu.addAction(open_action)
+        if file_info.isDir():
+            open_action = QAction("Open Folder", self)
+            open_action.triggered.connect(lambda: self.navigate_to_directory(file_path))
+            menu.addAction(open_action)
+        else:
+            open_action = QAction("Open", self)
+            open_action.triggered.connect(lambda: self.open_file(file_path))
+            menu.addAction(open_action)
         
         open_folder_action = QAction("Open Containing Folder", self)
         open_folder_action.triggered.connect(lambda: self.open_containing_folder(file_path))
@@ -1198,7 +1127,7 @@ class FileBrowser(QWidget):
         properties_action.triggered.connect(lambda: self.show_file_properties(file_path))
         menu.addAction(properties_action)
         
-        menu.exec(self.file_tree.mapToGlobal(position))
+        menu.exec(self.file_list.mapToGlobal(position))
         
     def open_file(self, file_path: str):
         """Open file with system default application"""
@@ -1223,23 +1152,19 @@ class FileBrowser(QWidget):
             
     def show_file_properties(self, file_path: str):
         """Show file properties dialog"""
-        file_info = None
-        for info in self.indexed_files:
-            if info['path'] == file_path:
-                file_info = info
-                break
-                
-        if file_info:
-            from datetime import datetime
-            
+        file_info = QFileInfo(file_path)
+        
+        if file_info.exists():
             properties_text = f"""
-File: {file_info['name']}
-Path: {file_info['path']}
-Type: {file_info['description']}
-Size: {file_info['size']} bytes
-Modified: {datetime.fromtimestamp(file_info['modified']).strftime('%Y-%m-%d %H:%M:%S')}
-Accessible: {'Yes' if file_info['is_accessible'] else 'No'}
-Directory: {file_info['directory']}
+File: {file_info.fileName()}
+Path: {file_info.absoluteFilePath()}
+Type: {'Folder' if file_info.isDir() else 'File'}
+Size: {self.format_file_size(file_info.size())}
+Modified: {file_info.lastModified().toString('yyyy-MM-dd hh:mm:ss')}
+Created: {file_info.birthTime().toString('yyyy-MM-dd hh:mm:ss')}
+Readable: {'Yes' if file_info.isReadable() else 'No'}
+Writable: {'Yes' if file_info.isWritable() else 'No'}
+Directory: {file_info.absolutePath()}
             """.strip()
             
             QMessageBox.information(self, "File Properties", properties_text)
