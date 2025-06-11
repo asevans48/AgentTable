@@ -68,8 +68,9 @@ class VectorSearchEngine:
             self.embeddings_path = Path.cwd() / self.embeddings_path
             
         self.model_name = config_manager.get("vector_search.model", "all-MiniLM-L6-v2")
-        self.max_chunk_size = config_manager.get("vector_search.max_chunk_size", 512)
-        self.chunk_overlap = config_manager.get("vector_search.chunk_overlap", 50)
+        self.max_chunk_size = config_manager.get("vector_search.max_chunk_size", 1024)  # Larger for structured samples
+        self.chunk_overlap = config_manager.get("vector_search.chunk_overlap", 100)
+        self.sample_mode = config_manager.get("vector_search.sample_mode", True)  # Enable intelligent sampling
         
         # Ensure directories exist with proper permissions
         try:
@@ -308,7 +309,7 @@ class VectorSearchEngine:
             return ""
             
     def _extract_text_content(self, file_path: str) -> str:
-        """Extract text content from various file types with size limits"""
+        """Extract intelligent sample content from files focusing on structure and metadata"""
         file_path_str = str(file_path)
         
         # Handle virtual dataset documents
@@ -316,89 +317,474 @@ class VectorSearchEngine:
             return file_path_str  # Return as-is for virtual documents
         
         file_path = Path(file_path)
-        content = ""
         
         try:
             # Check if file exists (skip for virtual documents)
             if not file_path.exists():
                 return f"Virtual document: {file_path_str}"
             
-            # Check file size first - skip files larger than 10MB
+            # Check file size first - skip files larger than 50MB
             file_size = file_path.stat().st_size
-            max_file_size = 10 * 1024 * 1024  # 10MB
+            max_file_size = 50 * 1024 * 1024  # 50MB
             
             if file_size > max_file_size:
                 logger.warning(f"Skipping large file {file_path}: {file_size} bytes > {max_file_size} bytes")
-                return f"File: {file_path.name}\nType: {file_path.suffix}\nFile too large for indexing ({file_size:,} bytes)"
+                return self._create_file_summary(file_path, "File too large for content sampling")
             
-            # Maximum content to read (1MB)
-            max_content_size = 1024 * 1024  # 1MB
-            
-            if file_path.suffix.lower() == '.txt':
-                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                    content = f.read(max_content_size)
-                    
-            elif file_path.suffix.lower() == '.md':
-                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                    content = f.read(max_content_size)
-                    
-            elif file_path.suffix.lower() == '.py':
-                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                    content = f.read(max_content_size)
-                    
-            elif file_path.suffix.lower() == '.json':
-                with open(file_path, 'r', encoding='utf-8') as f:
-                    # For JSON, read limited content and try to parse
-                    raw_content = f.read(max_content_size)
-                    try:
-                        data = json.loads(raw_content)
-                        content = json.dumps(data, indent=2)[:max_content_size]
-                    except json.JSONDecodeError:
-                        # If truncated JSON is invalid, just use raw content
-                        content = raw_content
-                    
-            elif file_path.suffix.lower() == '.csv':
-                # Read first 1000 lines or 1MB, whichever is smaller
-                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                    lines = []
-                    total_size = 0
-                    for i, line in enumerate(f):
-                        if i >= 1000 or total_size >= max_content_size:
-                            break
-                        lines.append(line)
-                        total_size += len(line.encode('utf-8'))
-                    content = ''.join(lines)
-                    
-            else:
-                # Try to read as text with size limit
-                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                    content = f.read(max_content_size)
-                    
-            # Add truncation notice if content was limited
-            if len(content) >= max_content_size - 100:  # Close to limit
-                content += "\n\n[Content truncated for indexing]"
+            # Extract intelligent samples based on file type
+            return self._extract_intelligent_sample(file_path)
                     
         except Exception as e:
-            logger.warning(f"Could not extract text from {file_path}: {e}")
-            content = f"File: {file_path.name}\nType: {file_path.suffix}\nContent could not be extracted: {str(e)}"
+            logger.warning(f"Could not extract content from {file_path}: {e}")
+            return self._create_file_summary(file_path, f"Content extraction failed: {str(e)}")
+    
+    def _create_file_summary(self, file_path: Path, note: str = "") -> str:
+        """Create a structured summary of file metadata without full content"""
+        try:
+            stat = file_path.stat()
+            size_mb = stat.st_size / (1024 * 1024)
             
-        return content
+            summary_parts = [
+                f"FILE: {file_path.name}",
+                f"PATH: {file_path.parent}",
+                f"TYPE: {file_path.suffix.upper()} file",
+                f"SIZE: {size_mb:.2f} MB ({stat.st_size:,} bytes)",
+                f"MODIFIED: {datetime.fromtimestamp(stat.st_mtime).strftime('%Y-%m-%d %H:%M:%S')}"
+            ]
+            
+            if note:
+                summary_parts.append(f"NOTE: {note}")
+                
+            return "\n".join(summary_parts)
+            
+        except Exception as e:
+            return f"FILE: {file_path.name}\nERROR: {str(e)}"
+    
+    def _extract_intelligent_sample(self, file_path: Path) -> str:
+        """Extract intelligent samples focusing on structure, schema, and key content"""
+        file_ext = file_path.suffix.lower()
+        max_sample_size = 8192  # 8KB sample size
+        
+        try:
+            if file_ext == '.csv':
+                return self._sample_csv_file(file_path, max_sample_size)
+            elif file_ext == '.json':
+                return self._sample_json_file(file_path, max_sample_size)
+            elif file_ext == '.py':
+                return self._sample_python_file(file_path, max_sample_size)
+            elif file_ext in ['.sql']:
+                return self._sample_sql_file(file_path, max_sample_size)
+            elif file_ext in ['.txt', '.md']:
+                return self._sample_text_file(file_path, max_sample_size)
+            elif file_ext in ['.xlsx', '.xls']:
+                return self._sample_excel_file(file_path)
+            else:
+                # Generic text sampling
+                return self._sample_generic_file(file_path, max_sample_size)
+                
+        except Exception as e:
+            logger.warning(f"Error sampling {file_path}: {e}")
+            return self._create_file_summary(file_path, f"Sampling failed: {str(e)}")
+    
+    def _sample_csv_file(self, file_path: Path, max_size: int) -> str:
+        """Sample CSV file focusing on headers and data structure"""
+        try:
+            import csv
+            
+            with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                # Read first few lines to detect structure
+                sample_lines = []
+                total_size = 0
+                line_count = 0
+                
+                for line in f:
+                    if total_size >= max_size or line_count >= 100:  # Max 100 rows
+                        break
+                    sample_lines.append(line.strip())
+                    total_size += len(line.encode('utf-8'))
+                    line_count += 1
+                
+                if not sample_lines:
+                    return self._create_file_summary(file_path, "Empty CSV file")
+                
+                # Try to detect CSV structure
+                sniffer = csv.Sniffer()
+                delimiter = sniffer.sniff(sample_lines[0]).delimiter
+                
+                # Parse headers and sample data
+                reader = csv.reader(sample_lines, delimiter=delimiter)
+                rows = list(reader)
+                
+                if not rows:
+                    return self._create_file_summary(file_path, "No readable CSV data")
+                
+                headers = rows[0] if rows else []
+                sample_data = rows[1:min(6, len(rows))]  # First 5 data rows
+                
+                # Create structured summary
+                summary_parts = [
+                    f"CSV FILE: {file_path.name}",
+                    f"COLUMNS ({len(headers)}): {', '.join(headers[:10])}{'...' if len(headers) > 10 else ''}",
+                    f"SAMPLE ROWS: {len(sample_data)} of estimated {line_count}+ total rows",
+                    f"DELIMITER: '{delimiter}'",
+                    ""
+                ]
+                
+                # Add sample data
+                if sample_data:
+                    summary_parts.append("SAMPLE DATA:")
+                    for i, row in enumerate(sample_data[:3]):  # Show first 3 rows
+                        row_preview = [str(cell)[:20] + "..." if len(str(cell)) > 20 else str(cell) for cell in row[:5]]
+                        summary_parts.append(f"Row {i+1}: {' | '.join(row_preview)}")
+                
+                return "\n".join(summary_parts)
+                
+        except Exception as e:
+            return self._create_file_summary(file_path, f"CSV parsing error: {str(e)}")
+    
+    def _sample_json_file(self, file_path: Path, max_size: int) -> str:
+        """Sample JSON file focusing on structure and schema"""
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                # Read limited content
+                content = f.read(max_size)
+                
+                try:
+                    data = json.loads(content)
+                except json.JSONDecodeError:
+                    # If truncated, try to read smaller amount
+                    f.seek(0)
+                    content = f.read(max_size // 2)
+                    try:
+                        data = json.loads(content)
+                    except json.JSONDecodeError:
+                        return self._create_file_summary(file_path, "Invalid or truncated JSON")
+                
+                # Analyze JSON structure
+                summary_parts = [f"JSON FILE: {file_path.name}"]
+                
+                if isinstance(data, dict):
+                    keys = list(data.keys())
+                    summary_parts.extend([
+                        f"TYPE: Object with {len(keys)} keys",
+                        f"KEYS: {', '.join(keys[:10])}{'...' if len(keys) > 10 else ''}",
+                        ""
+                    ])
+                    
+                    # Sample key-value pairs
+                    summary_parts.append("SAMPLE STRUCTURE:")
+                    for key in keys[:5]:
+                        value = data[key]
+                        value_type = type(value).__name__
+                        if isinstance(value, (list, dict)):
+                            value_preview = f"{value_type} with {len(value)} items"
+                        else:
+                            value_str = str(value)
+                            value_preview = value_str[:50] + "..." if len(value_str) > 50 else value_str
+                        summary_parts.append(f"  {key}: {value_preview} ({value_type})")
+                        
+                elif isinstance(data, list):
+                    summary_parts.extend([
+                        f"TYPE: Array with {len(data)} items",
+                        ""
+                    ])
+                    
+                    if data and isinstance(data[0], dict):
+                        # Array of objects - show schema
+                        first_item = data[0]
+                        keys = list(first_item.keys())
+                        summary_parts.extend([
+                            f"ITEM SCHEMA: Objects with {len(keys)} keys",
+                            f"ITEM KEYS: {', '.join(keys[:10])}{'...' if len(keys) > 10 else ''}",
+                            "",
+                            "SAMPLE ITEMS:"
+                        ])
+                        
+                        for i, item in enumerate(data[:3]):
+                            if isinstance(item, dict):
+                                item_preview = {k: str(v)[:30] + "..." if len(str(v)) > 30 else v 
+                                              for k, v in list(item.items())[:3]}
+                                summary_parts.append(f"  Item {i+1}: {item_preview}")
+                    else:
+                        # Array of primitives
+                        sample_items = [str(item)[:30] + "..." if len(str(item)) > 30 else str(item) 
+                                      for item in data[:5]]
+                        summary_parts.extend([
+                            "SAMPLE VALUES:",
+                            f"  {', '.join(sample_items)}"
+                        ])
+                else:
+                    summary_parts.append(f"TYPE: {type(data).__name__} - {str(data)[:100]}")
+                
+                return "\n".join(summary_parts)
+                
+        except Exception as e:
+            return self._create_file_summary(file_path, f"JSON analysis error: {str(e)}")
+    
+    def _sample_python_file(self, file_path: Path, max_size: int) -> str:
+        """Sample Python file focusing on structure and key elements"""
+        try:
+            with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                lines = []
+                total_size = 0
+                
+                for line in f:
+                    if total_size >= max_size:
+                        break
+                    lines.append(line.rstrip())
+                    total_size += len(line.encode('utf-8'))
+                
+                # Analyze Python structure
+                imports = []
+                classes = []
+                functions = []
+                docstring = None
+                
+                in_docstring = False
+                docstring_lines = []
+                
+                for i, line in enumerate(lines):
+                    stripped = line.strip()
+                    
+                    # Extract module docstring
+                    if i < 10 and ('"""' in stripped or "'''" in stripped) and not docstring:
+                        if stripped.count('"""') >= 2 or stripped.count("'''") >= 2:
+                            # Single line docstring
+                            docstring = stripped.strip('"""').strip("'''").strip()
+                        else:
+                            # Multi-line docstring start
+                            in_docstring = True
+                            docstring_lines = [stripped.strip('"""').strip("'''")]
+                    elif in_docstring:
+                        if '"""' in stripped or "'''" in stripped:
+                            docstring_lines.append(stripped.strip('"""').strip("'''"))
+                            docstring = ' '.join(docstring_lines).strip()
+                            in_docstring = False
+                        else:
+                            docstring_lines.append(stripped)
+                    
+                    # Extract imports
+                    elif stripped.startswith(('import ', 'from ')):
+                        imports.append(stripped)
+                    
+                    # Extract class definitions
+                    elif stripped.startswith('class '):
+                        class_name = stripped.split('(')[0].replace('class ', '').strip(':')
+                        classes.append(class_name)
+                    
+                    # Extract function definitions
+                    elif stripped.startswith('def '):
+                        func_name = stripped.split('(')[0].replace('def ', '')
+                        functions.append(func_name)
+                
+                # Create summary
+                summary_parts = [
+                    f"PYTHON FILE: {file_path.name}",
+                    f"LINES: {len(lines)} (sampled)"
+                ]
+                
+                if docstring:
+                    summary_parts.extend(["", f"DESCRIPTION: {docstring[:200]}{'...' if len(docstring) > 200 else ''}"])
+                
+                if imports:
+                    summary_parts.extend(["", f"IMPORTS ({len(imports)}):"])
+                    for imp in imports[:10]:
+                        summary_parts.append(f"  {imp}")
+                    if len(imports) > 10:
+                        summary_parts.append(f"  ... and {len(imports) - 10} more")
+                
+                if classes:
+                    summary_parts.extend(["", f"CLASSES ({len(classes)}): {', '.join(classes[:10])}"])
+                
+                if functions:
+                    summary_parts.extend(["", f"FUNCTIONS ({len(functions)}): {', '.join(functions[:10])}"])
+                
+                return "\n".join(summary_parts)
+                
+        except Exception as e:
+            return self._create_file_summary(file_path, f"Python analysis error: {str(e)}")
+    
+    def _sample_sql_file(self, file_path: Path, max_size: int) -> str:
+        """Sample SQL file focusing on structure and key statements"""
+        try:
+            with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                content = f.read(max_size)
+                
+                # Extract SQL statements and structure
+                lines = content.split('\n')
+                statements = []
+                tables = set()
+                
+                current_statement = []
+                
+                for line in lines:
+                    stripped = line.strip().upper()
+                    
+                    if any(stripped.startswith(keyword) for keyword in 
+                           ['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'CREATE', 'ALTER', 'DROP']):
+                        if current_statement:
+                            statements.append(' '.join(current_statement))
+                        current_statement = [line.strip()]
+                    elif current_statement:
+                        current_statement.append(line.strip())
+                        
+                    # Extract table names
+                    if 'FROM ' in stripped or 'TABLE ' in stripped:
+                        words = stripped.split()
+                        for i, word in enumerate(words):
+                            if word in ['FROM', 'TABLE', 'INTO', 'UPDATE'] and i + 1 < len(words):
+                                table_name = words[i + 1].strip('(),;')
+                                if table_name and not table_name.upper() in ['SELECT', 'WHERE', 'GROUP']:
+                                    tables.add(table_name)
+                
+                if current_statement:
+                    statements.append(' '.join(current_statement))
+                
+                # Create summary
+                summary_parts = [
+                    f"SQL FILE: {file_path.name}",
+                    f"STATEMENTS: {len(statements)} SQL statements found"
+                ]
+                
+                if tables:
+                    summary_parts.append(f"TABLES: {', '.join(list(tables)[:10])}")
+                
+                if statements:
+                    summary_parts.extend(["", "SAMPLE STATEMENTS:"])
+                    for i, stmt in enumerate(statements[:3]):
+                        stmt_preview = stmt[:100] + "..." if len(stmt) > 100 else stmt
+                        summary_parts.append(f"  {i+1}. {stmt_preview}")
+                
+                return "\n".join(summary_parts)
+                
+        except Exception as e:
+            return self._create_file_summary(file_path, f"SQL analysis error: {str(e)}")
+    
+    def _sample_text_file(self, file_path: Path, max_size: int) -> str:
+        """Sample text/markdown file focusing on structure and key content"""
+        try:
+            with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                content = f.read(max_size)
+                
+                lines = content.split('\n')
+                
+                # Extract structure for markdown
+                if file_path.suffix.lower() == '.md':
+                    headers = []
+                    for line in lines:
+                        stripped = line.strip()
+                        if stripped.startswith('#'):
+                            level = len(stripped) - len(stripped.lstrip('#'))
+                            header_text = stripped.lstrip('#').strip()
+                            headers.append(f"{'  ' * (level-1)}H{level}: {header_text}")
+                    
+                    summary_parts = [
+                        f"MARKDOWN FILE: {file_path.name}",
+                        f"LINES: {len(lines)}"
+                    ]
+                    
+                    if headers:
+                        summary_parts.extend(["", "STRUCTURE:"] + headers[:15])
+                    
+                    # Add content preview
+                    content_preview = content[:500] + "..." if len(content) > 500 else content
+                    summary_parts.extend(["", "CONTENT PREVIEW:", content_preview])
+                    
+                else:
+                    # Regular text file
+                    summary_parts = [
+                        f"TEXT FILE: {file_path.name}",
+                        f"LINES: {len(lines)}",
+                        f"CHARACTERS: {len(content)}",
+                        "",
+                        "CONTENT PREVIEW:",
+                        content[:500] + "..." if len(content) > 500 else content
+                    ]
+                
+                return "\n".join(summary_parts)
+                
+        except Exception as e:
+            return self._create_file_summary(file_path, f"Text analysis error: {str(e)}")
+    
+    def _sample_excel_file(self, file_path: Path) -> str:
+        """Sample Excel file (metadata only since we don't have pandas)"""
+        return self._create_file_summary(file_path, "Excel file - install pandas/openpyxl for content analysis")
+    
+    def _sample_generic_file(self, file_path: Path, max_size: int) -> str:
+        """Generic file sampling for unknown types"""
+        try:
+            with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                content = f.read(min(max_size, 1024))  # Smaller sample for unknown types
+                
+                summary_parts = [
+                    f"FILE: {file_path.name}",
+                    f"TYPE: {file_path.suffix.upper() or 'Unknown'} file",
+                    "",
+                    "CONTENT SAMPLE:",
+                    content[:300] + "..." if len(content) > 300 else content
+                ]
+                
+                return "\n".join(summary_parts)
+                
+        except Exception as e:
+            return self._create_file_summary(file_path, f"Generic sampling error: {str(e)}")
         
     def _chunk_text(self, text: str) -> List[str]:
-        """Split text into chunks for embedding"""
-        if len(text) <= self.max_chunk_size:
+        """Split structured content into logical chunks focusing on sections and metadata"""
+        # For structured content samples, we typically want fewer, more meaningful chunks
+        max_chunk_size = min(self.max_chunk_size, 2048)  # Smaller chunks for samples
+        
+        if len(text) <= max_chunk_size:
             return [text]
             
         chunks = []
-        start = 0
         
+        # Try to split on logical boundaries first
+        logical_separators = [
+            '\n---\n',  # Our content separator
+            '\nSAMPLE DATA:\n',
+            '\nSTRUCTURE:\n', 
+            '\nCONTENT PREVIEW:\n',
+            '\n\n',  # Paragraph breaks
+            '\n'     # Line breaks
+        ]
+        
+        # Split on the first separator that creates reasonable chunks
+        for separator in logical_separators:
+            if separator in text:
+                parts = text.split(separator)
+                current_chunk = ""
+                
+                for part in parts:
+                    # If adding this part would exceed chunk size, save current chunk
+                    if len(current_chunk) + len(part) + len(separator) > max_chunk_size:
+                        if current_chunk.strip():
+                            chunks.append(current_chunk.strip())
+                        current_chunk = part
+                    else:
+                        if current_chunk:
+                            current_chunk += separator + part
+                        else:
+                            current_chunk = part
+                
+                # Add the last chunk
+                if current_chunk.strip():
+                    chunks.append(current_chunk.strip())
+                
+                # If we got reasonable chunks, return them
+                if len(chunks) > 1 and all(len(chunk) < max_chunk_size for chunk in chunks):
+                    return chunks
+                else:
+                    chunks = []  # Reset and try next separator
+        
+        # Fallback to character-based chunking if logical splitting didn't work
+        start = 0
         while start < len(text):
-            end = start + self.max_chunk_size
+            end = start + max_chunk_size
             
-            # Try to break at sentence or paragraph boundaries
+            # Try to break at sentence or line boundaries
             if end < len(text):
-                # Look for sentence endings
-                for i in range(end, max(start + self.max_chunk_size - 100, start), -1):
+                for i in range(end, max(start + max_chunk_size - 200, start), -1):
                     if text[i] in '.!?\n':
                         end = i + 1
                         break
@@ -411,39 +797,51 @@ class VectorSearchEngine:
             if start >= len(text):
                 break
                 
-        return chunks
+        return chunks if chunks else [text]  # Always return at least one chunk
         
     def _create_enhanced_content(self, chunk: str, title: str, fileset_name: str = None, 
                                fileset_description: str = None, tags: List[str] = None,
                                user_description: str = None, schema_info: str = None) -> str:
-        """Create enhanced content for better vector search by including comprehensive metadata"""
+        """Create enhanced content for vector search prioritizing metadata and structure over raw content"""
         enhanced_parts = []
         
-        # Add structured metadata for better search context
+        # Prioritize structured metadata for better search context
         if fileset_name:
-            enhanced_parts.append(f"Dataset: {fileset_name}")
+            enhanced_parts.append(f"DATASET: {fileset_name}")
         if title:
-            enhanced_parts.append(f"Document: {title}")
+            enhanced_parts.append(f"FILE: {title}")
         if fileset_description:
-            enhanced_parts.append(f"Dataset Purpose: {fileset_description}")
+            enhanced_parts.append(f"PURPOSE: {fileset_description}")
         if user_description:
-            enhanced_parts.append(f"Description: {user_description}")
+            enhanced_parts.append(f"DESCRIPTION: {user_description}")
         if schema_info:
-            enhanced_parts.append(f"Data Structure: {schema_info}")
+            enhanced_parts.append(f"SCHEMA: {schema_info}")
         if tags:
-            enhanced_parts.append(f"Categories: {', '.join(tags)}")
+            enhanced_parts.append(f"TAGS: {', '.join(tags)}")
             
-        # Add searchable keywords based on metadata
-        search_keywords = []
+        # Generate searchable keywords from metadata
+        search_keywords = set()
         if fileset_name:
-            search_keywords.extend(fileset_name.lower().split('_'))
+            # Split on common separators and add variations
+            for word in fileset_name.lower().replace('_', ' ').replace('-', ' ').split():
+                search_keywords.add(word)
         if tags:
-            search_keywords.extend([tag.lower() for tag in tags])
+            for tag in tags:
+                search_keywords.add(tag.lower())
+        if title:
+            for word in title.lower().replace('_', ' ').replace('-', ' ').split():
+                search_keywords.add(word)
+                
         if search_keywords:
-            enhanced_parts.append(f"Keywords: {' '.join(set(search_keywords))}")
+            enhanced_parts.append(f"KEYWORDS: {' '.join(sorted(search_keywords))}")
             
-        # Add the actual content with clear separation
-        enhanced_parts.append("---")  # Separator
+        # Add file path context for better discovery
+        if title and '/' in chunk:  # Likely contains path info
+            enhanced_parts.append(f"LOCATION: {title}")
+            
+        # Add the structured content sample (not full content)
+        enhanced_parts.append("---")
+        enhanced_parts.append("CONTENT STRUCTURE:")
         enhanced_parts.append(chunk)
         
         return '\n'.join(enhanced_parts)

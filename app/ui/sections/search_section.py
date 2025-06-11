@@ -241,11 +241,11 @@ class VectorSearchTab(QWidget):
         
         instructions = QLabel("""
 <b>Vector Search Instructions:</b><br>
-• <b>Manual Indexing Required:</b> Click "Rebuild Index" to index files<br>
-• Indexing is limited to files under 10MB and max 1000 files per directory<br>
-• Use the main search bar to perform semantic searches after indexing<br>
-• Results show content chunks with similarity scores<br>
-• Adjust similarity threshold to filter results
+• <b>Intelligent Sampling:</b> Files are sampled for structure, schema, and metadata rather than full content<br>
+• <b>Optimized for Discovery:</b> Focus on file types, schemas, headers, and key structural elements<br>
+• <b>Efficient Indexing:</b> Files up to 50MB, with smart content sampling (8KB samples)<br>
+• Use the main search bar to find files by content type, structure, or metadata<br>
+• Results prioritize file structure and metadata over raw content
         """)
         instructions.setStyleSheet("color: #495057; font-size: 9pt; line-height: 1.4;")
         instructions.setWordWrap(True)
@@ -253,9 +253,10 @@ class VectorSearchTab(QWidget):
         
         # Warning about large files
         warning = QLabel("""
-<b>⚠️ Performance Note:</b> Vector indexing can be time-consuming for large datasets. 
-Files larger than 10MB are automatically skipped to prevent performance issues.
+<b>💡 Smart Sampling:</b> Vector indexing uses intelligent content sampling to focus on file structure, 
+schemas, and metadata rather than full content. This provides faster indexing and better discovery of data assets.
         """)
+        warning.setStyleSheet("color: #0066cc; background-color: #e6f3ff; border: 1px solid #b3d9ff; border-radius: 4px; padding: 8px; margin-top: 8px; font-size: 8pt;")
         warning.setStyleSheet("color: #856404; background-color: #fff3cd; border: 1px solid #ffeaa7; border-radius: 4px; padding: 8px; margin-top: 8px; font-size: 8pt;")
         warning.setWordWrap(True)
         instructions_layout.addWidget(warning)
