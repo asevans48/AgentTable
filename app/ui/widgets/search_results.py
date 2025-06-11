@@ -5,7 +5,7 @@ Displays search results in Google-like format with summaries
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QScrollArea, 
-    QFrame, QPushButton, QProgressBar, QComboBox
+    QFrame, QPushButton, QProgressBar, QComboBox, QCheckBox
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtGui import QFont, QCursor
@@ -19,10 +19,12 @@ class SearchResultItem(QFrame):
     
     item_clicked = pyqtSignal(dict)  # result_data
     chat_requested = pyqtSignal(dict)  # result_data
+    selection_changed = pyqtSignal(dict, bool)  # result_data, is_selected
     
     def __init__(self, result_data: Dict[str, Any], parent=None):
         super().__init__(parent)
         self.result_data = result_data
+        self.is_selected = False
         self.setup_ui()
         
     def setup_ui(self):
@@ -44,6 +46,31 @@ class SearchResultItem(QFrame):
         
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 12, 12, 12)
+        
+        # Top row with checkbox and title
+        top_layout = QHBoxLayout()
+        
+        # Selection checkbox
+        self.selection_checkbox = QCheckBox()
+        self.selection_checkbox.setStyleSheet("""
+            QCheckBox::indicator {
+                width: 18px;
+                height: 18px;
+                border: 2px solid #ddd;
+                border-radius: 3px;
+                background-color: white;
+            }
+            QCheckBox::indicator:checked {
+                background-color: #1a73e8;
+                border-color: #1a73e8;
+                image: url(data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTIiIGhlaWdodD0iOSIgdmlld0JveD0iMCAwIDEyIDkiIGZpbGw9Im5vbmUiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+CjxwYXRoIGQ9Ik0xIDQuNUw0LjUgOEwxMSAxIiBzdHJva2U9IndoaXRlIiBzdHJva2Utd2lkdGg9IjIiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCIvPgo8L3N2Zz4K);
+            }
+            QCheckBox::indicator:hover {
+                border-color: #1a73e8;
+            }
+        """)
+        self.selection_checkbox.stateChanged.connect(self.on_selection_changed)
+        top_layout.addWidget(self.selection_checkbox)
         
         # Header row with title and metadata
         header_layout = QHBoxLayout()
@@ -93,7 +120,8 @@ class SearchResultItem(QFrame):
         metadata_layout.addWidget(access_badge)
         
         header_layout.addLayout(metadata_layout)
-        layout.addLayout(header_layout)
+        top_layout.addLayout(header_layout, 1)
+        layout.addLayout(top_layout)
         
         # URL/Path (if available)
         source_path = self.result_data.get('source_path', '')
@@ -269,6 +297,63 @@ class SearchResultItem(QFrame):
         footer_layout.addWidget(view_button)
         
         layout.addLayout(footer_layout)
+        
+    def on_selection_changed(self, state):
+        """Handle checkbox selection change"""
+        self.is_selected = state == Qt.CheckState.Checked.value
+        self.selection_changed.emit(self.result_data, self.is_selected)
+        
+        # Update visual appearance based on selection
+        if self.is_selected:
+            self.setStyleSheet("""
+                QFrame {
+                    background-color: #e3f2fd;
+                    border: 2px solid #1a73e8;
+                    border-radius: 8px;
+                    margin: 4px;
+                    padding: 8px;
+                }
+            """)
+        else:
+            self.setStyleSheet("""
+                QFrame {
+                    background-color: white;
+                    border: 1px solid #e0e0e0;
+                    border-radius: 8px;
+                    margin: 4px;
+                    padding: 8px;
+                }
+                QFrame:hover {
+                    border-color: #1a73e8;
+                    background-color: #f8f9fa;
+                }
+            """)
+    
+    def set_selected(self, selected: bool):
+        """Programmatically set selection state"""
+        self.selection_checkbox.setChecked(selected)
+    
+    def get_selection_data(self) -> Dict[str, Any]:
+        """Get data for tracking this selection"""
+        return {
+            'id': self.get_unique_id(),
+            'type': 'dataset' if self.result_data.get('is_dataset', False) else 'file',
+            'name': self.result_data.get('title', 'Unknown'),
+            'path': self.result_data.get('source_path', ''),
+            'fileset_name': self.result_data.get('fileset_name', ''),
+            'result_data': self.result_data
+        }
+    
+    def get_unique_id(self) -> str:
+        """Generate unique ID for this result item"""
+        # Use path as primary identifier, fallback to title + type
+        path = self.result_data.get('source_path', '')
+        if path:
+            return path
+        else:
+            title = self.result_data.get('title', 'Unknown')
+            item_type = self.result_data.get('source_type', 'Unknown')
+            return f"{item_type}:{title}"
         
     def on_title_clicked(self, event):
         """Handle title click"""
@@ -518,12 +603,14 @@ class SearchResults(QWidget):
     
     item_selected = pyqtSignal(dict)  # selected result data
     chat_requested = pyqtSignal(dict)  # result data for chat
+    selection_changed = pyqtSignal(list)  # list of selected items
     
     def __init__(self, config_manager=None, parent=None):
         super().__init__(parent)
         self.config_manager = config_manager
         self.current_results = []
         self.search_worker = None
+        self.selected_items = {}  # Track selected items by unique ID
         
         self.setup_ui()
         self.setup_connections()
@@ -541,6 +628,52 @@ class SearchResults(QWidget):
         status_layout.addWidget(self.status_label)
         
         status_layout.addStretch()
+        
+        # Selection controls
+        self.selection_controls = QWidget()
+        self.selection_controls.setVisible(False)
+        selection_layout = QHBoxLayout(self.selection_controls)
+        selection_layout.setContentsMargins(0, 0, 0, 0)
+        
+        self.selection_label = QLabel("0 selected")
+        self.selection_label.setStyleSheet("color: #1a73e8; font-weight: bold; font-size: 9pt;")
+        selection_layout.addWidget(self.selection_label)
+        
+        self.select_all_btn = QPushButton("Select All")
+        self.select_all_btn.setStyleSheet("""
+            QPushButton {
+                background: transparent;
+                border: 1px solid #1a73e8;
+                color: #1a73e8;
+                padding: 2px 8px;
+                border-radius: 3px;
+                font-size: 8pt;
+            }
+            QPushButton:hover {
+                background-color: #e3f2fd;
+            }
+        """)
+        self.select_all_btn.clicked.connect(self.select_all_items)
+        selection_layout.addWidget(self.select_all_btn)
+        
+        self.clear_selection_btn = QPushButton("Clear")
+        self.clear_selection_btn.setStyleSheet("""
+            QPushButton {
+                background: transparent;
+                border: 1px solid #666;
+                color: #666;
+                padding: 2px 8px;
+                border-radius: 3px;
+                font-size: 8pt;
+            }
+            QPushButton:hover {
+                background-color: #f5f5f5;
+            }
+        """)
+        self.clear_selection_btn.clicked.connect(self.clear_all_selections)
+        selection_layout.addWidget(self.clear_selection_btn)
+        
+        status_layout.addWidget(self.selection_controls)
         
         # Sort and filter controls
         self.sort_combo = QComboBox()
@@ -636,14 +769,16 @@ class SearchResults(QWidget):
         if not query.strip():
             return
             
-        # Clear previous results
+        # Clear previous results and selections
         self.clear_results()
+        self.clear_all_selections()
         
         # Show progress
         self.progress_bar.setVisible(True)
         self.progress_bar.setValue(0)
         self.status_label.setText(f"Searching for: {query}")
         self.sort_combo.setVisible(False)
+        self.selection_controls.setVisible(False)
         
         # Start background search
         self.search_worker = SearchWorker(query, search_type, self.config_manager)
@@ -669,6 +804,7 @@ class SearchResults(QWidget):
         if self.current_results:
             self.status_label.setText(f"Found {len(self.current_results)} results")
             self.sort_combo.setVisible(True)
+            self.selection_controls.setVisible(True)
         else:
             self.status_label.setText("No results found")
             self.show_no_results_message()
@@ -681,6 +817,7 @@ class SearchResults(QWidget):
             result_item = SearchResultItem(result)
             result_item.item_clicked.connect(self.item_selected.emit)
             result_item.chat_requested.connect(self.chat_requested.emit)
+            result_item.selection_changed.connect(self.on_item_selection_changed)
             self.results_layout.addWidget(result_item)
             
         # Add stretch to push results to top
@@ -751,6 +888,72 @@ class SearchResults(QWidget):
         
         self.results_layout.addWidget(error_widget)
         
+    def on_item_selection_changed(self, result_data: Dict[str, Any], is_selected: bool):
+        """Handle individual item selection change"""
+        # Find the result item that changed
+        result_item = None
+        for i in range(self.results_layout.count()):
+            widget = self.results_layout.itemAt(i).widget()
+            if isinstance(widget, SearchResultItem) and widget.result_data == result_data:
+                result_item = widget
+                break
+        
+        if not result_item:
+            return
+            
+        selection_data = result_item.get_selection_data()
+        unique_id = selection_data['id']
+        
+        if is_selected:
+            self.selected_items[unique_id] = selection_data
+        else:
+            self.selected_items.pop(unique_id, None)
+            
+        self.update_selection_display()
+        self.selection_changed.emit(list(self.selected_items.values()))
+    
+    def update_selection_display(self):
+        """Update the selection count display"""
+        count = len(self.selected_items)
+        if count == 0:
+            self.selection_label.setText("0 selected")
+        elif count == 1:
+            self.selection_label.setText("1 item selected")
+        else:
+            self.selection_label.setText(f"{count} items selected")
+    
+    def select_all_items(self):
+        """Select all visible result items"""
+        for i in range(self.results_layout.count()):
+            widget = self.results_layout.itemAt(i).widget()
+            if isinstance(widget, SearchResultItem):
+                widget.set_selected(True)
+    
+    def clear_all_selections(self):
+        """Clear all selections"""
+        self.selected_items.clear()
+        
+        # Update UI
+        for i in range(self.results_layout.count()):
+            widget = self.results_layout.itemAt(i).widget()
+            if isinstance(widget, SearchResultItem):
+                widget.set_selected(False)
+                
+        self.update_selection_display()
+        self.selection_changed.emit([])
+    
+    def get_selected_items(self) -> List[Dict[str, Any]]:
+        """Get list of currently selected items"""
+        return list(self.selected_items.values())
+    
+    def get_selected_files(self) -> List[Dict[str, Any]]:
+        """Get list of selected files only"""
+        return [item for item in self.selected_items.values() if item['type'] == 'file']
+    
+    def get_selected_datasets(self) -> List[Dict[str, Any]]:
+        """Get list of selected datasets only"""
+        return [item for item in self.selected_items.values() if item['type'] == 'dataset']
+    
     def sort_results(self, sort_by: str):
         """Sort results by given criteria"""
         if not self.current_results:

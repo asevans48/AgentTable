@@ -395,6 +395,9 @@ class MainWindow(QMainWindow):
         self.search_results = SearchResults(self.config_manager)
         layout.addWidget(self.search_results)
         
+        # Track selected items
+        self.selected_search_items = []
+        
         return panel
         
     def create_right_panel(self):
@@ -531,6 +534,9 @@ class MainWindow(QMainWindow):
         self.file_browser.file_selected.connect(self.on_file_selected)
         self.dataset_browser.dataset_selected.connect(self.on_dataset_selected)
         
+        # Connect search results selection tracking
+        self.search_results.selection_changed.connect(self.on_search_selection_changed)
+        
         # Connect vector database update signals
         self.file_browser.file_metadata_changed.connect(self.on_file_metadata_changed)
         self.file_browser.directory_added.connect(self.on_directory_added)
@@ -569,6 +575,38 @@ class MainWindow(QMainWindow):
     def on_file_metadata_changed(self, file_path, metadata):
         """Handle file metadata changes"""
         self.status_bar.showMessage(f"Updated metadata for: {Path(file_path).name}")
+        
+    def on_search_selection_changed(self, selected_items):
+        """Handle changes in search result selections"""
+        self.selected_search_items = selected_items
+        
+        # Update status bar to show selection count
+        if selected_items:
+            files_count = len([item for item in selected_items if item['type'] == 'file'])
+            datasets_count = len([item for item in selected_items if item['type'] == 'dataset'])
+            
+            status_parts = []
+            if files_count > 0:
+                status_parts.append(f"{files_count} file{'s' if files_count != 1 else ''}")
+            if datasets_count > 0:
+                status_parts.append(f"{datasets_count} dataset{'s' if datasets_count != 1 else ''}")
+                
+            if status_parts:
+                self.status_bar.showMessage(f"Selected: {', '.join(status_parts)}")
+        else:
+            self.status_bar.showMessage("Ready")
+    
+    def get_selected_search_items(self):
+        """Get currently selected search items"""
+        return self.selected_search_items.copy()
+    
+    def get_selected_files(self):
+        """Get currently selected files from search results"""
+        return [item for item in self.selected_search_items if item['type'] == 'file']
+    
+    def get_selected_datasets(self):
+        """Get currently selected datasets from search results"""
+        return [item for item in self.selected_search_items if item['type'] == 'dataset']
         
     def on_directory_added(self, directory_path):
         """Handle new directory being added"""
