@@ -279,6 +279,7 @@ class FileBrowser(QWidget):
         self.watched_tree = QTreeView()
         self.watched_tree.setHeaderHidden(True)
         self.watched_tree.setMaximumHeight(100)
+        self.watched_tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.watched_tree.setStyleSheet("""
             QTreeView {
                 border: 1px solid #ddd;
@@ -412,11 +413,14 @@ class FileBrowser(QWidget):
             path = item.data(Qt.ItemDataRole.UserRole)
             if path:
                 self.current_directory = path
+                
+                # Filter files to show only those in the selected directory
                 self.apply_filters()
                 
                 # Update status to show current directory
                 dir_name = Path(path).name
-                self.status_label.setText(f"📂 {dir_name}")
+                visible_count = self.file_model.rowCount()
+                self.status_label.setText(f"📂 {dir_name} ({visible_count} files)")
                 
     def on_file_clicked(self, index):
         """Handle file clicks"""
@@ -543,6 +547,7 @@ class FileBrowser(QWidget):
         
         # Watched directories
         self.watched_tree.clicked.connect(self.on_watched_directory_clicked)
+        self.watched_tree.customContextMenuRequested.connect(self.show_watched_directory_context_menu)
         
         # Context menus
         self.file_list.customContextMenuRequested.connect(self.show_context_menu)
@@ -601,21 +606,18 @@ class FileBrowser(QWidget):
                 
         # Type filter
         type_filter = self.type_filter.currentText()
-        if type_filter != "All Types" and file_info['type'] != type_filter:
+        if type_filter != "All" and file_info['type'] != type_filter:
             return False
             
         # Metadata filter
         metadata_filter = self.metadata_filter.currentText()
-        if metadata_filter != "All Files":
+        if metadata_filter != "All":
             metadata = self.metadata_manager.get_file_metadata(file_info['path'])
             
-            if metadata_filter == "With Metadata":
-                if not (metadata.get('tags') or metadata.get('description') or metadata.get('category')):
+            if metadata_filter == "Tagged":
+                if not metadata.get('tags'):
                     return False
-            elif metadata_filter == "Without Metadata":
-                if metadata.get('tags') or metadata.get('description') or metadata.get('category'):
-                    return False
-            elif metadata_filter == "Vector Indexed":
+            elif metadata_filter == "Indexed":
                 if not metadata.get('indexed_for_vector_search', False):
                     return False
             
@@ -909,6 +911,62 @@ Directory: {file_info['directory']}
             """.strip()
             
             QMessageBox.information(self, "File Properties", properties_text)
+            
+    def show_watched_directory_context_menu(self, position):
+        """Show context menu for watched directories"""
+        index = self.watched_tree.indexAt(position)
+        if not index.isValid():
+            return
+            
+        item = self.watched_model.itemFromIndex(index)
+        directory_path = item.data(Qt.ItemDataRole.UserRole)
+        
+        menu = QMenu(self)
+        
+        open_action = QAction("Open in File Explorer", self)
+        open_action.triggered.connect(lambda: self.open_containing_folder(directory_path))
+        menu.addAction(open_action)
+        
+        menu.addSeparator()
+        
+        remove_action = QAction("Remove from Watch List", self)
+        remove_action.triggered.connect(lambda: self.remove_watched_directory(directory_path))
+        menu.addAction(remove_action)
+        
+        menu.exec(self.watched_tree.mapToGlobal(position))
+        
+    def remove_watched_directory(self, directory_path: str):
+        """Remove directory from watch list"""
+        from PyQt6.QtWidgets import QMessageBox
+        
+        reply = QMessageBox.question(
+            self,
+            "Remove Directory",
+            f"Remove '{Path(directory_path).name}' from the watch list?\n\n"
+            "This will not delete the directory, just stop watching it for changes.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+        
+        if reply == QMessageBox.StandardButton.Yes:
+            # Remove from config
+            watched_dirs = self.config_manager.get("file_management.watched_directories", [])
+            if directory_path in watched_dirs:
+                watched_dirs.remove(directory_path)
+                self.config_manager.set("file_management.watched_directories", watched_dirs)
+                
+                # Remove from file watcher
+                self.file_watcher.removePath(directory_path)
+                
+                # Reload the watched directories display
+                self.load_watched_directories()
+                
+                # Clear current directory if it was the removed one
+                if self.current_directory == directory_path:
+                    self.current_directory = None
+                    self.apply_filters()
+                    
+                self.status_label.setText(f"Removed '{Path(directory_path).name}' from watch list")
 
 class DirectoryMetadataDialog(QDialog):
     """Dialog for collecting metadata when adding a directory"""
