@@ -114,41 +114,77 @@ class VectorSearchEngine:
             conn = sqlite3.connect(db_path_str)
             cursor = conn.cursor()
             
-            # Create documents table
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS documents (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    file_path TEXT UNIQUE NOT NULL,
-                    file_hash TEXT NOT NULL,
-                    title TEXT,
-                    content_preview TEXT,
-                    file_type TEXT,
-                    file_size INTEGER,
-                    fileset_name TEXT,
-                    fileset_description TEXT,
-                    schema_info TEXT,
-                    tags TEXT,
-                    user_description TEXT,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    indexed_at TIMESTAMP,
-                    chunk_count INTEGER DEFAULT 0
-                )
-            """)
+            # Check if database exists and needs migration
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='documents'")
+            table_exists = cursor.fetchone() is not None
             
-            # Create chunks table
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS chunks (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    document_id INTEGER,
-                    chunk_index INTEGER,
-                    content TEXT NOT NULL,
-                    enhanced_content TEXT,
-                    embedding_id TEXT,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (document_id) REFERENCES documents (id)
-                )
-            """)
+            if table_exists:
+                # Check if new columns exist and add them if needed
+                cursor.execute("PRAGMA table_info(documents)")
+                columns = [column[1] for column in cursor.fetchall()]
+                
+                # Add missing columns for metadata enhancement
+                if 'fileset_name' not in columns:
+                    cursor.execute("ALTER TABLE documents ADD COLUMN fileset_name TEXT")
+                if 'fileset_description' not in columns:
+                    cursor.execute("ALTER TABLE documents ADD COLUMN fileset_description TEXT")
+                if 'schema_info' not in columns:
+                    cursor.execute("ALTER TABLE documents ADD COLUMN schema_info TEXT")
+                if 'tags' not in columns:
+                    cursor.execute("ALTER TABLE documents ADD COLUMN tags TEXT")
+                if 'user_description' not in columns:
+                    cursor.execute("ALTER TABLE documents ADD COLUMN user_description TEXT")
+                    
+                logger.info("Database schema updated with new metadata columns")
+            else:
+                # Create documents table with all columns
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS documents (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        file_path TEXT UNIQUE NOT NULL,
+                        file_hash TEXT NOT NULL,
+                        title TEXT,
+                        content_preview TEXT,
+                        file_type TEXT,
+                        file_size INTEGER,
+                        fileset_name TEXT,
+                        fileset_description TEXT,
+                        schema_info TEXT,
+                        tags TEXT,
+                        user_description TEXT,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        indexed_at TIMESTAMP,
+                        chunk_count INTEGER DEFAULT 0
+                    )
+                """)
+            
+            # Check and update chunks table
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='chunks'")
+            chunks_table_exists = cursor.fetchone() is not None
+            
+            if chunks_table_exists:
+                # Check if enhanced_content column exists
+                cursor.execute("PRAGMA table_info(chunks)")
+                chunk_columns = [column[1] for column in cursor.fetchall()]
+                
+                if 'enhanced_content' not in chunk_columns:
+                    cursor.execute("ALTER TABLE chunks ADD COLUMN enhanced_content TEXT")
+                    logger.info("Added enhanced_content column to chunks table")
+            else:
+                # Create chunks table
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS chunks (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        document_id INTEGER,
+                        chunk_index INTEGER,
+                        content TEXT NOT NULL,
+                        enhanced_content TEXT,
+                        embedding_id TEXT,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY (document_id) REFERENCES documents (id)
+                    )
+                """)
             
             # Create filesets table for dataset management
             cursor.execute("""
