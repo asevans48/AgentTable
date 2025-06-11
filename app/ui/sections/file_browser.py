@@ -4,6 +4,7 @@ Shows files in watched directories with preview and management capabilities
 """
 
 import os
+import sys
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 from PyQt6.QtWidgets import (
@@ -15,7 +16,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import (
     Qt, pyqtSignal, QModelIndex, QThread, QFileSystemWatcher
 )
-from PyQt6.QtGui import QFont, QAction, QStandardItemModel, QStandardItem, QIcon, QPixmap, QPainter
+from PyQt6.QtGui import QFont, QAction, QStandardItemModel, QStandardItem, QIcon, QPixmap, QPainter, QColor
 from typing import Dict, Any
 
 import logging
