@@ -469,6 +469,13 @@ class SettingsDialog(QDialog):
         self.vector_tab.save_settings()
         self.settings_changed.emit()
         
+    def show_cloud_auth(self):
+        """Show cloud authentication dialog"""
+        from ui.dialogs.cloud_auth_dialog import CloudAuthDialog
+        
+        dialog = CloudAuthDialog(self)
+        dialog.exec()
+    
     def accept(self):
         """Accept and save settings"""
         self.apply_settings()
