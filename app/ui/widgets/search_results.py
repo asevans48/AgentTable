@@ -38,7 +38,7 @@ class SearchResultItem(QFrame):
             }
             QFrame:hover {
                 border-color: #1a73e8;
-                box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+                background-color: #f8f9fa;
             }
         """)
         

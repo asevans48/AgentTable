@@ -35,23 +35,58 @@ class VectorSearchEngine:
         self.documents = []
         self.embeddings_cache = {}
         
-        # Vector search configuration
-        self.vector_db_path = Path(config_manager.get("vector_search.database_path", "data/vector_search.db"))
-        self.embeddings_path = Path(config_manager.get("vector_search.embeddings_path", "data/embeddings"))
+        # Vector search configuration with absolute paths
+        default_data_dir = Path.cwd() / "data"
+        self.vector_db_path = Path(config_manager.get("vector_search.database_path", str(default_data_dir / "vector_search.db")))
+        self.embeddings_path = Path(config_manager.get("vector_search.embeddings_path", str(default_data_dir / "embeddings")))
+        
+        # Make paths absolute if they're relative
+        if not self.vector_db_path.is_absolute():
+            self.vector_db_path = Path.cwd() / self.vector_db_path
+        if not self.embeddings_path.is_absolute():
+            self.embeddings_path = Path.cwd() / self.embeddings_path
+            
         self.model_name = config_manager.get("vector_search.model", "all-MiniLM-L6-v2")
         self.max_chunk_size = config_manager.get("vector_search.max_chunk_size", 512)
         self.chunk_overlap = config_manager.get("vector_search.chunk_overlap", 50)
         
-        # Ensure directories exist
-        self.vector_db_path.parent.mkdir(parents=True, exist_ok=True)
-        self.embeddings_path.mkdir(parents=True, exist_ok=True)
+        # Ensure directories exist with proper permissions
+        try:
+            self.vector_db_path.parent.mkdir(parents=True, exist_ok=True)
+            self.embeddings_path.mkdir(parents=True, exist_ok=True)
+            
+            # Test write access to the database directory
+            test_file = self.vector_db_path.parent / "test_write.tmp"
+            test_file.touch()
+            test_file.unlink()
+            
+            logger.info(f"Vector database path: {self.vector_db_path}")
+            logger.info(f"Embeddings path: {self.embeddings_path}")
+            
+        except Exception as e:
+            logger.error(f"Failed to create vector search directories: {e}")
+            # Fallback to user's home directory
+            fallback_dir = Path.home() / ".dataplatform" / "vector_search"
+            fallback_dir.mkdir(parents=True, exist_ok=True)
+            self.vector_db_path = fallback_dir / "vector_search.db"
+            self.embeddings_path = fallback_dir / "embeddings"
+            self.embeddings_path.mkdir(exist_ok=True)
+            logger.warning(f"Using fallback directory: {fallback_dir}")
         
         self._init_database()
         
     def _init_database(self):
         """Initialize SQLite database for document metadata"""
         try:
-            conn = sqlite3.connect(self.vector_db_path)
+            # Ensure the database file can be created
+            if not self.vector_db_path.parent.exists():
+                self.vector_db_path.parent.mkdir(parents=True, exist_ok=True)
+                
+            # Use absolute path for SQLite connection
+            db_path_str = str(self.vector_db_path.resolve())
+            logger.info(f"Initializing vector database at: {db_path_str}")
+            
+            conn = sqlite3.connect(db_path_str)
             cursor = conn.cursor()
             
             # Create documents table
@@ -100,7 +135,8 @@ class VectorSearchEngine:
             conn.close()
             
         except Exception as e:
-            logger.error(f"Error initializing vector database: {e}")
+            logger.error(f"Error initializing vector database at {self.vector_db_path}: {e}")
+            raise RuntimeError(f"Cannot initialize vector database: {e}")
             
     def _load_model(self):
         """Load the sentence transformer model"""
