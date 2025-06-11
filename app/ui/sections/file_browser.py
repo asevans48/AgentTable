@@ -197,92 +197,98 @@ class FileBrowser(QWidget):
         self.load_watched_directories()
         
     def setup_ui(self):
-        """Setup the file browser UI for watched directories and files"""
+        """Setup the compact file browser UI for sidebar use"""
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(5, 5, 5, 5)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(8)
         
-        # Header with title and controls
-        header_layout = QHBoxLayout()
+        # Compact header
+        header_layout = QVBoxLayout()
+        header_layout.setSpacing(4)
+        
+        # Title and add button
+        title_layout = QHBoxLayout()
+        title_layout.setContentsMargins(0, 0, 0, 0)
         
         title_label = QLabel("Files")
-        title_label.setFont(QFont("Arial", 12, QFont.Weight.Bold))
-        header_layout.addWidget(title_label)
+        title_label.setFont(QFont("Arial", 11, QFont.Weight.Bold))
+        title_layout.addWidget(title_label)
         
-        header_layout.addStretch()
+        title_layout.addStretch()
         
-        # Add watched directory button
-        add_dir_button = QPushButton("+ Add Directory")
-        add_dir_button.setToolTip("Add directory to watch list")
+        # Compact add button
+        add_dir_button = QPushButton("+")
+        add_dir_button.setToolTip("Add directory to watch")
+        add_dir_button.setFixedSize(24, 24)
         add_dir_button.setStyleSheet("""
             QPushButton {
                 background-color: #28a745;
                 color: white;
                 border: none;
-                padding: 4px 8px;
-                border-radius: 4px;
-                font-size: 9pt;
+                border-radius: 12px;
+                font-size: 12pt;
+                font-weight: bold;
             }
             QPushButton:hover {
                 background-color: #218838;
             }
         """)
         add_dir_button.clicked.connect(self.add_directory)
-        header_layout.addWidget(add_dir_button)
+        title_layout.addWidget(add_dir_button)
         
-        layout.addLayout(header_layout)
+        header_layout.addLayout(title_layout)
         
-        # Search and filter bar
-        filter_layout = QHBoxLayout()
-        
+        # Compact search bar
         self.filter_input = QLineEdit()
         self.filter_input.setPlaceholderText("Search files...")
         self.filter_input.setStyleSheet("""
             QLineEdit {
-                padding: 4px;
+                padding: 6px;
                 border: 1px solid #ddd;
                 border-radius: 4px;
                 font-size: 9pt;
             }
         """)
-        filter_layout.addWidget(self.filter_input)
+        header_layout.addWidget(self.filter_input)
+        
+        # Compact filter row
+        filter_layout = QHBoxLayout()
+        filter_layout.setContentsMargins(0, 0, 0, 0)
         
         self.type_filter = QComboBox()
-        self.type_filter.addItems(["All Types", ".pdf", ".docx", ".xlsx", ".csv", ".json", ".txt", ".py", ".md"])
-        self.type_filter.setStyleSheet("font-size: 9pt;")
+        self.type_filter.addItems(["All", ".pdf", ".csv", ".json", ".txt", ".py"])
+        self.type_filter.setStyleSheet("font-size: 8pt; padding: 2px;")
+        self.type_filter.setMaximumHeight(24)
         filter_layout.addWidget(self.type_filter)
         
         self.metadata_filter = QComboBox()
-        self.metadata_filter.addItems(["All Files", "With Metadata", "Without Metadata", "Vector Indexed"])
-        self.metadata_filter.setStyleSheet("font-size: 9pt;")
+        self.metadata_filter.addItems(["All", "Tagged", "Indexed"])
+        self.metadata_filter.setStyleSheet("font-size: 8pt; padding: 2px;")
+        self.metadata_filter.setMaximumHeight(24)
         filter_layout.addWidget(self.metadata_filter)
         
-        layout.addLayout(filter_layout)
-        
-        # Main content area with splitter
-        main_splitter = QSplitter(Qt.Orientation.Horizontal)
-        
-        # Left panel: Watched directories and file list
-        left_widget = QWidget()
-        left_layout = QVBoxLayout(left_widget)
-        left_layout.setContentsMargins(0, 0, 0, 0)
+        header_layout.addLayout(filter_layout)
+        layout.addLayout(header_layout)
         
         # Watched directories section
-        watched_label = QLabel("Watched Directories")
-        watched_label.setFont(QFont("Arial", 10, QFont.Weight.Bold))
-        watched_label.setStyleSheet("padding: 4px; background-color: #f0f0f0; border-radius: 3px;")
-        left_layout.addWidget(watched_label)
+        watched_header = QLabel("Directories")
+        watched_header.setFont(QFont("Arial", 9, QFont.Weight.Bold))
+        watched_header.setStyleSheet("color: #495057; padding: 2px 0px;")
+        layout.addWidget(watched_header)
         
         self.watched_tree = QTreeView()
-        self.watched_tree.setMaximumHeight(120)
         self.watched_tree.setHeaderHidden(True)
+        self.watched_tree.setMaximumHeight(100)
         self.watched_tree.setStyleSheet("""
             QTreeView {
                 border: 1px solid #ddd;
                 border-radius: 4px;
                 background-color: #f8f9fa;
+                font-size: 9pt;
             }
             QTreeView::item {
-                padding: 4px;
+                padding: 6px 8px;
+                border: none;
             }
             QTreeView::item:hover {
                 background-color: #e9ecef;
@@ -292,30 +298,41 @@ class FileBrowser(QWidget):
                 color: white;
             }
         """)
-        left_layout.addWidget(self.watched_tree)
+        layout.addWidget(self.watched_tree)
         
-        # File list section
-        files_label = QLabel("Files")
-        files_label.setFont(QFont("Arial", 10, QFont.Weight.Bold))
-        files_label.setStyleSheet("padding: 4px; background-color: #f0f0f0; border-radius: 3px; margin-top: 8px;")
-        left_layout.addWidget(files_label)
+        # Files section
+        files_header_layout = QHBoxLayout()
+        files_header_layout.setContentsMargins(0, 8, 0, 0)
         
-        # File list view
+        files_header = QLabel("Files")
+        files_header.setFont(QFont("Arial", 9, QFont.Weight.Bold))
+        files_header.setStyleSheet("color: #495057; padding: 2px 0px;")
+        files_header_layout.addWidget(files_header)
+        
+        files_header_layout.addStretch()
+        
+        # File count label
+        self.file_count_label = QLabel("0")
+        self.file_count_label.setStyleSheet("color: #6c757d; font-size: 8pt; padding: 2px 4px; background-color: #e9ecef; border-radius: 8px;")
+        files_header_layout.addWidget(self.file_count_label)
+        
+        layout.addLayout(files_header_layout)
+        
+        # Compact file list
         self.file_list = QTreeView()
+        self.file_list.setHeaderHidden(True)
         self.file_list.setAlternatingRowColors(True)
-        self.file_list.setSortingEnabled(True)
-        self.file_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        self.file_list.setRootIsDecorated(False)
         self.file_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.file_list.setStyleSheet("""
             QTreeView {
                 border: 1px solid #ddd;
                 border-radius: 4px;
                 background-color: white;
-                selection-background-color: #e3f2fd;
-                gridline-color: #f0f0f0;
+                font-size: 9pt;
             }
             QTreeView::item {
-                padding: 4px;
+                padding: 4px 6px;
                 border-bottom: 1px solid #f8f9fa;
             }
             QTreeView::item:hover {
@@ -326,22 +343,11 @@ class FileBrowser(QWidget):
                 color: black;
             }
         """)
-        left_layout.addWidget(self.file_list)
+        layout.addWidget(self.file_list)
         
-        main_splitter.addWidget(left_widget)
-        
-        # Right panel: File details and metadata
-        self.details_panel = self.create_details_panel()
-        main_splitter.addWidget(self.details_panel)
-        
-        # Set splitter proportions
-        main_splitter.setSizes([500, 300])
-        
-        layout.addWidget(main_splitter)
-        
-        # Status bar
+        # Compact status
         self.status_label = QLabel("Ready")
-        self.status_label.setStyleSheet("font-size: 8pt; color: #666; padding: 4px;")
+        self.status_label.setStyleSheet("font-size: 8pt; color: #6c757d; padding: 4px 0px;")
         layout.addWidget(self.status_label)
         
     def go_back(self):
@@ -400,13 +406,17 @@ class FileBrowser(QWidget):
             self.navigate_to_directory(path)
             
     def on_watched_directory_clicked(self, index):
-        """Handle watched directory clicks"""
+        """Handle watched directory clicks - show files from that directory"""
         if index.isValid():
             item = self.watched_model.itemFromIndex(index)
             path = item.data(Qt.ItemDataRole.UserRole)
             if path:
                 self.current_directory = path
                 self.apply_filters()
+                
+                # Update status to show current directory
+                dir_name = Path(path).name
+                self.status_label.setText(f"📂 {dir_name}")
                 
     def on_file_clicked(self, index):
         """Handle file clicks"""
@@ -472,7 +482,7 @@ class FileBrowser(QWidget):
         
         # Clear and repopulate models
         self.file_model.clear()
-        self.file_model.setHorizontalHeaderLabels(['Name', 'Type', 'Size', 'Tags'])
+        self.file_model.setHorizontalHeaderLabels(['Files'])
         
         filtered_files = []
         for file_info in self.indexed_files:
@@ -480,192 +490,40 @@ class FileBrowser(QWidget):
                 self.add_file_to_model(file_info)
                 filtered_files.append(file_info)
                 
-        # Update status
+        # Update file count
         visible_count = len(filtered_files)
-        total_count = len(self.indexed_files)
+        self.file_count_label.setText(str(visible_count))
         
+        # Update status
         if self.current_directory:
             dir_name = Path(self.current_directory).name
-            if visible_count != total_count:
-                self.status_label.setText(f"Showing {visible_count} of {total_count} files in {dir_name}")
-            else:
-                self.status_label.setText(f"Found {total_count} files in {dir_name}")
+            self.status_label.setText(f"📂 {dir_name} ({visible_count} files)")
         else:
-            if visible_count != total_count:
-                self.status_label.setText(f"Showing {visible_count} of {total_count} files")
-            else:
-                self.status_label.setText(f"Found {total_count} files in watched directories")
+            self.status_label.setText(f"All directories ({visible_count} files)")
         
     def setup_file_models(self):
-        """Setup file list model"""
-        # Create standard item model for file list
+        """Setup compact file list model"""
+        # Create standard item model for file list - single column for compact view
         self.file_model = QStandardItemModel()
-        self.file_model.setHorizontalHeaderLabels(['Name', 'Type', 'Size', 'Tags'])
+        self.file_model.setHorizontalHeaderLabels(['Files'])
         self.file_list.setModel(self.file_model)
         
-        # Configure file list columns
-        header = self.file_list.header()
-        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)  # Name
-        header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)  # Type
-        header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)  # Size
-        header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)  # Tags
-        
     def create_details_panel(self):
-        """Create the file details and metadata panel"""
+        """Create a minimal details panel for the compact sidebar"""
         details_widget = QWidget()
-        details_widget.setMaximumWidth(350)
-        details_widget.setMinimumWidth(250)
+        details_widget.setVisible(False)  # Hidden by default in compact mode
         
         layout = QVBoxLayout(details_widget)
+        layout.setContentsMargins(0, 0, 0, 0)
         
-        # Panel title
-        title_label = QLabel("File Details")
-        title_label.setFont(QFont("Arial", 11, QFont.Weight.Bold))
-        title_label.setStyleSheet("padding: 8px; background-color: #f8f9fa; border-radius: 4px;")
-        layout.addWidget(title_label)
-        
-        # Tabs for different detail views
-        self.details_tabs = QTabWidget()
-        
-        # Properties tab
-        self.properties_tab = self.create_properties_tab()
-        self.details_tabs.addTab(self.properties_tab, "Properties")
-        
-        # Metadata tab
-        self.metadata_tab = self.create_metadata_tab()
-        self.details_tabs.addTab(self.metadata_tab, "Metadata")
-        
-        # Preview tab
-        self.preview_tab = self.create_preview_tab()
-        self.details_tabs.addTab(self.preview_tab, "Preview")
-        
-        layout.addWidget(self.details_tabs)
-        
-        # No file selected message
-        self.no_selection_label = QLabel("Select a file to view details")
-        self.no_selection_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.no_selection_label.setStyleSheet("color: #666; font-style: italic; padding: 20px;")
-        layout.addWidget(self.no_selection_label)
-        
-        # Initially hide tabs
-        self.details_tabs.setVisible(False)
+        # Minimal file info
+        self.selected_file_label = QLabel("No file selected")
+        self.selected_file_label.setStyleSheet("font-size: 8pt; color: #6c757d; padding: 4px;")
+        self.selected_file_label.setWordWrap(True)
+        layout.addWidget(self.selected_file_label)
         
         return details_widget
         
-    def create_properties_tab(self):
-        """Create the file properties tab"""
-        widget = QWidget()
-        layout = QVBoxLayout(widget)
-        
-        # File info labels
-        self.file_name_label = QLabel()
-        self.file_name_label.setWordWrap(True)
-        self.file_name_label.setStyleSheet("font-weight: bold; padding: 4px;")
-        layout.addWidget(self.file_name_label)
-        
-        self.file_path_label = QLabel()
-        self.file_path_label.setWordWrap(True)
-        self.file_path_label.setStyleSheet("color: #666; font-size: 8pt; padding: 4px;")
-        layout.addWidget(self.file_path_label)
-        
-        # Properties group
-        props_group = QGroupBox("Properties")
-        props_layout = QFormLayout(props_group)
-        
-        self.file_size_label = QLabel()
-        props_layout.addRow("Size:", self.file_size_label)
-        
-        self.file_type_label = QLabel()
-        props_layout.addRow("Type:", self.file_type_label)
-        
-        self.file_modified_label = QLabel()
-        props_layout.addRow("Modified:", self.file_modified_label)
-        
-        self.file_accessible_label = QLabel()
-        props_layout.addRow("Accessible:", self.file_accessible_label)
-        
-        layout.addWidget(props_group)
-        
-        layout.addStretch()
-        return widget
-        
-    def create_metadata_tab(self):
-        """Create the file metadata tab"""
-        widget = QWidget()
-        layout = QVBoxLayout(widget)
-        
-        # Metadata form
-        form_layout = QFormLayout()
-        
-        # Tags
-        self.metadata_tags = QLineEdit()
-        self.metadata_tags.setPlaceholderText("tag1, tag2, tag3")
-        form_layout.addRow("Tags:", self.metadata_tags)
-        
-        # Description
-        self.metadata_description = QTextEdit()
-        self.metadata_description.setMaximumHeight(80)
-        self.metadata_description.setPlaceholderText("File description...")
-        form_layout.addRow("Description:", self.metadata_description)
-        
-        # Category
-        self.metadata_category = QComboBox()
-        self.metadata_category.addItems(["", "Document", "Data", "Code", "Image", "Archive", "Other"])
-        self.metadata_category.setEditable(True)
-        form_layout.addRow("Category:", self.metadata_category)
-        
-        # Priority
-        self.metadata_priority = QComboBox()
-        self.metadata_priority.addItems(["Low", "Normal", "High", "Critical"])
-        self.metadata_priority.setCurrentText("Normal")
-        form_layout.addRow("Priority:", self.metadata_priority)
-        
-        # Vector search indexing
-        self.metadata_vector_indexed = QCheckBox("Include in vector search")
-        self.metadata_vector_indexed.setChecked(True)
-        form_layout.addRow(self.metadata_vector_indexed)
-        
-        layout.addLayout(form_layout)
-        
-        # Save button
-        save_metadata_btn = QPushButton("Save Metadata")
-        save_metadata_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #007bff;
-                color: white;
-                border: none;
-                padding: 6px 12px;
-                border-radius: 4px;
-                font-weight: bold;
-            }
-            QPushButton:hover { background-color: #0056b3; }
-        """)
-        save_metadata_btn.clicked.connect(self.save_file_metadata)
-        layout.addWidget(save_metadata_btn)
-        
-        layout.addStretch()
-        return widget
-        
-    def create_preview_tab(self):
-        """Create the file preview tab"""
-        widget = QWidget()
-        layout = QVBoxLayout(widget)
-        
-        self.preview_content = QTextEdit()
-        self.preview_content.setReadOnly(True)
-        self.preview_content.setPlaceholderText("File preview will appear here...")
-        self.preview_content.setStyleSheet("""
-            QTextEdit {
-                border: 1px solid #ddd;
-                border-radius: 4px;
-                background-color: #f8f9fa;
-                font-family: 'Consolas', 'Monaco', monospace;
-                font-size: 9pt;
-            }
-        """)
-        layout.addWidget(self.preview_content)
-        
-        return widget
         
         
     def refresh(self):
@@ -764,47 +622,44 @@ class FileBrowser(QWidget):
         return True
         
     def add_file_to_model(self, file_info: Dict[str, Any]):
-        """Add file to the file list model"""
+        """Add file to the compact file list model"""
         # Get file metadata
         metadata = self.metadata_manager.get_file_metadata(file_info['path'])
         
         # Create file icon based on type
         file_icon = self.get_file_icon(file_info['type'])
         
-        # Add to tree view
-        name_item = QStandardItem(file_info['name'])
+        # Create compact display text with file name and size
+        display_text = file_info['name']
+        size_text = self.format_file_size(file_info['size'])
+        
+        # Add tags indicator if present
+        if metadata.get('tags'):
+            display_text += f" 🏷️"
+        
+        # Add to single column view
+        name_item = QStandardItem(display_text)
         name_item.setData(file_info['path'], Qt.ItemDataRole.UserRole)
         name_item.setIcon(file_icon)
         
-        # Enhanced tooltip with metadata
+        # Enhanced tooltip with all metadata
         tooltip_parts = [
-            f"Path: {file_info['path']}",
-            f"Type: {file_info['description']}",
-            f"Size: {self.format_file_size(file_info['size'])}"
+            f"📁 {file_info['name']}",
+            f"📂 {Path(file_info['path']).parent.name}",
+            f"📏 {self.format_file_size(file_info['size'])}",
+            f"🗂️ {file_info['description']}"
         ]
         if metadata.get('description'):
-            tooltip_parts.append(f"Description: {metadata['description']}")
+            tooltip_parts.append(f"📝 {metadata['description']}")
         if metadata.get('tags'):
-            tooltip_parts.append(f"Tags: {', '.join(metadata['tags'])}")
+            tooltip_parts.append(f"🏷️ {', '.join(metadata['tags'])}")
         name_item.setToolTip('\n'.join(tooltip_parts))
-        
-        # Type item
-        type_item = QStandardItem(file_info['type'])
-        
-        # Size item
-        size_item = QStandardItem(self.format_file_size(file_info['size']))
-        size_item.setData(file_info['size'], Qt.ItemDataRole.UserRole)  # Store actual size for sorting
-        
-        # Tags item
-        tags_text = ', '.join(metadata.get('tags', []))
-        tags_item = QStandardItem(tags_text)
         
         # Add accessibility indicator
         if not file_info['is_accessible']:
             name_item.setForeground(Qt.GlobalColor.red)
-            name_item.setToolTip(f"{file_info['path']}\nAccess denied")
             
-        self.file_model.appendRow([name_item, type_item, size_item, tags_item])
+        self.file_model.appendRow([name_item])
         
     def start_indexing(self):
         """Start indexing files in watched directories"""
@@ -840,7 +695,8 @@ class FileBrowser(QWidget):
             
     def on_indexing_complete(self, total_files: int):
         """Handle indexing completion"""
-        self.status_label.setText(f"Found {total_files} files in watched directories")
+        self.status_label.setText(f"Ready ({total_files} files)")
+        self.file_count_label.setText(str(total_files))
         
         # Sort the tree
         self.file_list.sortByColumn(0, Qt.SortOrder.AscendingOrder)
@@ -950,10 +806,9 @@ class FileBrowser(QWidget):
             self.refresh()
                 
     def show_file_details(self, file_path: str):
-        """Show file details in the details panel"""
+        """Show minimal file details in the compact sidebar"""
         if not file_path:
-            self.details_tabs.setVisible(False)
-            self.no_selection_label.setVisible(True)
+            self.selected_file_label.setText("No file selected")
             return
             
         # Find file info
@@ -966,95 +821,23 @@ class FileBrowser(QWidget):
         if not file_info:
             return
             
-        # Show details tabs
-        self.details_tabs.setVisible(True)
-        self.no_selection_label.setVisible(False)
+        # Show compact file info
+        file_name = file_info['name']
+        file_size = self.format_file_size(file_info['size'])
         
-        # Update properties tab
-        self.file_name_label.setText(file_info['name'])
-        self.file_path_label.setText(file_info['path'])
-        self.file_size_label.setText(self.format_file_size(file_info['size']))
-        self.file_type_label.setText(file_info['description'])
-        
-        from datetime import datetime
-        modified_time = datetime.fromtimestamp(file_info['modified']).strftime('%Y-%m-%d %H:%M:%S')
-        self.file_modified_label.setText(modified_time)
-        
-        accessible_text = "Yes" if file_info['is_accessible'] else "No"
-        self.file_accessible_label.setText(accessible_text)
-        
-        # Update metadata tab
+        # Get metadata for tags
         metadata = self.metadata_manager.get_file_metadata(file_path)
-        self.metadata_tags.setText(', '.join(metadata.get('tags', [])))
-        self.metadata_description.setPlainText(metadata.get('description', ''))
-        self.metadata_category.setCurrentText(metadata.get('category', ''))
-        self.metadata_priority.setCurrentText(metadata.get('priority', 'Normal'))
-        self.metadata_vector_indexed.setChecked(metadata.get('indexed_for_vector_search', False))
+        tags = metadata.get('tags', [])
         
-        # Update preview tab
-        self.load_file_preview(file_path)
-        
-    def load_file_preview(self, file_path: str):
-        """Load file preview content"""
-        try:
-            file_path_obj = Path(file_path)
-            
-            if file_path_obj.suffix.lower() in ['.txt', '.md', '.py', '.sql', '.json', '.csv']:
-                # Text-based files
-                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                    content = f.read()
-                    
-                # Limit preview size
-                if len(content) > 5000:
-                    content = content[:5000] + "\n\n... (truncated)"
-                    
-                self.preview_content.setPlainText(content)
-            else:
-                # Binary or unsupported files
-                self.preview_content.setPlainText(f"Preview not available for {file_path_obj.suffix} files")
+        display_text = f"📁 {file_name}\n📏 {file_size}"
+        if tags:
+            display_text += f"\n🏷️ {', '.join(tags[:2])}"
+            if len(tags) > 2:
+                display_text += f" +{len(tags)-2}"
                 
-        except Exception as e:
-            self.preview_content.setPlainText(f"Error loading preview: {str(e)}")
+        self.selected_file_label.setText(display_text)
+        
             
-    def save_file_metadata(self):
-        """Save metadata for the currently selected file"""
-        # Get current selection
-        current_file = None
-        
-        selection = self.file_list.selectionModel()
-        if selection.hasSelection():
-            index = selection.currentIndex()
-            if index.isValid():
-                name_item = self.file_model.item(index.row(), 0)
-                current_file = name_item.data(Qt.ItemDataRole.UserRole)
-                
-        if not current_file:
-            QMessageBox.warning(self, "No Selection", "Please select a file to save metadata for.")
-            return
-            
-        # Collect metadata
-        tags_text = self.metadata_tags.text().strip()
-        tags = [tag.strip() for tag in tags_text.split(',') if tag.strip()] if tags_text else []
-        
-        metadata = {
-            'tags': tags,
-            'description': self.metadata_description.toPlainText().strip(),
-            'category': self.metadata_category.currentText(),
-            'priority': self.metadata_priority.currentText(),
-            'indexed_for_vector_search': self.metadata_vector_indexed.isChecked(),
-            'custom_fields': {}
-        }
-        
-        # Save metadata
-        self.metadata_manager.set_file_metadata(current_file, metadata)
-        
-        # Emit signal
-        self.file_metadata_changed.emit(current_file, metadata)
-        
-        # Refresh display
-        self.apply_filters()
-        
-        QMessageBox.information(self, "Metadata Saved", "File metadata has been saved successfully.")
             
     def show_context_menu(self, position):
         """Show context menu for file operations"""
