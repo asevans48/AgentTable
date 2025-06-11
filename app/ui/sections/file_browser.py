@@ -369,6 +369,10 @@ class FileBrowser(QWidget):
         """)
         layout.addWidget(self.file_list)
         
+        # Details panel for selected file
+        self.details_panel = self.create_details_panel()
+        layout.addWidget(self.details_panel)
+        
         # Compact status
         self.status_label = QLabel("Ready")
         self.status_label.setStyleSheet("font-size: 8pt; color: #6c757d; padding: 4px 0px;")
@@ -560,14 +564,15 @@ class FileBrowser(QWidget):
     def create_details_panel(self):
         """Create a minimal details panel for the compact sidebar"""
         details_widget = QWidget()
-        details_widget.setVisible(False)  # Hidden by default in compact mode
+        details_widget.setVisible(True)  # Show by default
+        details_widget.setMaximumHeight(60)  # Keep it compact
         
         layout = QVBoxLayout(details_widget)
-        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setContentsMargins(4, 4, 4, 4)
         
         # Minimal file info
         self.selected_file_label = QLabel("No file selected")
-        self.selected_file_label.setStyleSheet("font-size: 8pt; color: #6c757d; padding: 4px;")
+        self.selected_file_label.setStyleSheet("font-size: 8pt; color: #6c757d; padding: 4px; background-color: #f8f9fa; border-radius: 3px;")
         self.selected_file_label.setWordWrap(True)
         layout.addWidget(self.selected_file_label)
         
