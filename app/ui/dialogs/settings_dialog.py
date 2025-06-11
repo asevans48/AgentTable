@@ -7,10 +7,11 @@ from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QTabWidget, QWidget, 
     QFormLayout, QLineEdit, QPushButton, QComboBox, QCheckBox,
     QLabel, QGroupBox, QFileDialog, QMessageBox, QTextEdit,
-    QSpinBox, QSlider, QScrollArea
+    QSpinBox, QSlider, QScrollArea, QDoubleSpinBox
 )
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QFont
+from pathlib import Path
 import logging
 
 logger = logging.getLogger(__name__)
@@ -248,6 +249,46 @@ class VectorSearchTab(QWidget):
         """Setup vector search configuration UI"""
         layout = QVBoxLayout(self)
         
+        # Database Configuration
+        db_group = QGroupBox("Database Configuration")
+        db_layout = QFormLayout(db_group)
+        
+        # Database path
+        db_path_layout = QHBoxLayout()
+        self.database_path = QLineEdit()
+        self.database_path.setPlaceholderText("Path to vector search database")
+        db_path_layout.addWidget(self.database_path)
+        
+        browse_db_btn = QPushButton("Browse...")
+        browse_db_btn.clicked.connect(self.browse_database_path)
+        db_path_layout.addWidget(browse_db_btn)
+        
+        reset_db_btn = QPushButton("Reset")
+        reset_db_btn.setToolTip("Reset to default path")
+        reset_db_btn.clicked.connect(self.reset_database_path)
+        db_path_layout.addWidget(reset_db_btn)
+        
+        db_layout.addRow("Database Path:", db_path_layout)
+        
+        # Embeddings path
+        embed_path_layout = QHBoxLayout()
+        self.embeddings_path = QLineEdit()
+        self.embeddings_path.setPlaceholderText("Path to embeddings storage")
+        embed_path_layout.addWidget(self.embeddings_path)
+        
+        browse_embed_btn = QPushButton("Browse...")
+        browse_embed_btn.clicked.connect(self.browse_embeddings_path)
+        embed_path_layout.addWidget(browse_embed_btn)
+        
+        reset_embed_btn = QPushButton("Reset")
+        reset_embed_btn.setToolTip("Reset to default path")
+        reset_embed_btn.clicked.connect(self.reset_embeddings_path)
+        embed_path_layout.addWidget(reset_embed_btn)
+        
+        db_layout.addRow("Embeddings Path:", embed_path_layout)
+        
+        layout.addWidget(db_group)
+        
         # Embedding Model
         embedding_group = QGroupBox("Embedding Model")
         embedding_layout = QFormLayout(embedding_group)
@@ -295,26 +336,133 @@ class VectorSearchTab(QWidget):
         
         layout.addWidget(search_group)
         
+        # Status and Testing
+        status_group = QGroupBox("Status")
+        status_layout = QVBoxLayout(status_group)
+        
+        self.status_label = QLabel("Vector search status will be shown here")
+        self.status_label.setStyleSheet("color: #666; font-style: italic;")
+        status_layout.addWidget(self.status_label)
+        
+        test_btn = QPushButton("Test Configuration")
+        test_btn.clicked.connect(self.test_configuration)
+        status_layout.addWidget(test_btn)
+        
+        layout.addWidget(status_group)
+        
         layout.addStretch()
+        
+    def browse_database_path(self):
+        """Browse for database file location"""
+        file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Select Vector Database Location",
+            self.database_path.text() or str(Path.cwd() / "data" / "vector_search.db"),
+            "Database Files (*.db);;All Files (*)"
+        )
+        if file_path:
+            self.database_path.setText(file_path)
+            self.update_status()
+            
+    def browse_embeddings_path(self):
+        """Browse for embeddings directory"""
+        dir_path = QFileDialog.getExistingDirectory(
+            self,
+            "Select Embeddings Directory",
+            self.embeddings_path.text() or str(Path.cwd() / "data" / "embeddings")
+        )
+        if dir_path:
+            self.embeddings_path.setText(dir_path)
+            self.update_status()
+            
+    def reset_database_path(self):
+        """Reset database path to default"""
+        default_path = str(Path.cwd() / "data" / "vector_search.db")
+        self.database_path.setText(default_path)
+        self.update_status()
+        
+    def reset_embeddings_path(self):
+        """Reset embeddings path to default"""
+        default_path = str(Path.cwd() / "data" / "embeddings")
+        self.embeddings_path.setText(default_path)
+        self.update_status()
+        
+    def test_configuration(self):
+        """Test the vector search configuration"""
+        try:
+            from utils.vector_search import VectorSearchEngine
+            
+            # Temporarily update config
+            old_db_path = self.config_manager.get("vector_search.database_path")
+            old_embed_path = self.config_manager.get("vector_search.embeddings_path")
+            
+            self.config_manager.set("vector_search.database_path", self.database_path.text())
+            self.config_manager.set("vector_search.embeddings_path", self.embeddings_path.text())
+            
+            # Test creating vector engine
+            vector_engine = VectorSearchEngine(self.config_manager)
+            stats = vector_engine.get_index_stats()
+            
+            self.status_label.setText(f"✅ Configuration valid. Database accessible.")
+            self.status_label.setStyleSheet("color: #28a745; font-weight: bold;")
+            
+            # Restore old config
+            self.config_manager.set("vector_search.database_path", old_db_path)
+            self.config_manager.set("vector_search.embeddings_path", old_embed_path)
+            
+        except Exception as e:
+            self.status_label.setText(f"❌ Configuration error: {str(e)}")
+            self.status_label.setStyleSheet("color: #dc3545; font-weight: bold;")
+            
+    def update_status(self):
+        """Update the status display"""
+        try:
+            from pathlib import Path
+            db_path = Path(self.database_path.text())
+            if db_path.exists():
+                self.status_label.setText(f"✅ Database exists at: {db_path}")
+                self.status_label.setStyleSheet("color: #28a745;")
+            else:
+                self.status_label.setText(f"📁 Database will be created at: {db_path}")
+                self.status_label.setStyleSheet("color: #ffc107;")
+        except Exception as e:
+            self.status_label.setText(f"❌ Invalid path: {str(e)}")
+            self.status_label.setStyleSheet("color: #dc3545;")
         
     def load_settings(self):
         """Load vector search settings from config"""
+        from pathlib import Path
+        
+        default_db_path = str(Path.cwd() / "data" / "vector_search.db")
+        default_embed_path = str(Path.cwd() / "data" / "embeddings")
+        
+        self.database_path.setText(
+            self.config_manager.get("vector_search.database_path", default_db_path)
+        )
+        self.embeddings_path.setText(
+            self.config_manager.get("vector_search.embeddings_path", default_embed_path)
+        )
         self.embedding_model.setCurrentText(
-            self.config_manager.get("vector_search.embedding_model", "all-MiniLM-L6-v2")
+            self.config_manager.get("vector_search.model", "all-MiniLM-L6-v2")
         )
         
         self.chunk_size.setValue(
-            self.config_manager.get("vector_search.chunk_size", 1000)
+            self.config_manager.get("vector_search.max_chunk_size", 512)
         )
         
         self.chunk_overlap.setValue(
-            self.config_manager.get("vector_search.chunk_overlap", 200)
+            self.config_manager.get("vector_search.chunk_overlap", 50)
         )
+        
+        # Update status
+        self.update_status()
         
     def save_settings(self):
         """Save vector search settings to config"""
-        self.config_manager.set("vector_search.embedding_model", self.embedding_model.currentText())
-        self.config_manager.set("vector_search.chunk_size", self.chunk_size.value())
+        self.config_manager.set("vector_search.database_path", self.database_path.text())
+        self.config_manager.set("vector_search.embeddings_path", self.embeddings_path.text())
+        self.config_manager.set("vector_search.model", self.embedding_model.currentText())
+        self.config_manager.set("vector_search.max_chunk_size", self.chunk_size.value())
         self.config_manager.set("vector_search.chunk_overlap", self.chunk_overlap.value())
 
 class DatabaseConnectionDialog(QDialog):
