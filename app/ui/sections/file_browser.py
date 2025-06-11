@@ -9,12 +9,13 @@ from typing import List, Dict, Any, Optional
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTreeView, QLabel, 
     QPushButton, QLineEdit, QComboBox, QMenu, QMessageBox,
-    QFileDialog, QFrame, QProgressBar
+    QFileDialog, QFrame, QProgressBar, QDialog, QFormLayout, QTextEdit
 )
 from PyQt6.QtCore import (
     Qt, pyqtSignal, QModelIndex, QThread,
 )
 from PyQt6.QtGui import QFont, QAction, QStandardItemModel, QStandardItem
+from typing import Dict, Any
 
 import logging
 
@@ -292,7 +293,7 @@ class FileBrowser(QWidget):
             self.status_label.setText("No directories being watched")
             
     def add_directory(self):
-        """Add directory to watch list"""
+        """Add directory to watch list with metadata collection"""
         directory = QFileDialog.getExistingDirectory(
             self,
             "Select Directory to Watch",
@@ -300,9 +301,22 @@ class FileBrowser(QWidget):
         )
         
         if directory:
-            self.config_manager.add_watched_directory(directory)
-            self.directory_added.emit(directory)
-            self.start_indexing()
+            # Show metadata dialog for the new directory
+            metadata_dialog = DirectoryMetadataDialog(directory, self)
+            if metadata_dialog.exec():
+                metadata = metadata_dialog.get_metadata()
+                
+                # Add to watched directories
+                self.config_manager.add_watched_directory(directory)
+                self.directory_added.emit(directory)
+                
+                # Start indexing with metadata
+                self.start_indexing_with_metadata(metadata)
+            else:
+                # User cancelled, add without metadata
+                self.config_manager.add_watched_directory(directory)
+                self.directory_added.emit(directory)
+                self.start_indexing()
             
     def start_indexing(self):
         """Start indexing files in watched directories"""
@@ -333,6 +347,42 @@ class FileBrowser(QWidget):
         self.indexer_worker.file_indexed.connect(self.on_file_indexed)
         self.indexer_worker.indexing_complete.connect(self.on_indexing_complete)
         self.indexer_worker.start()
+        
+        # Also trigger vector indexing
+        self.trigger_vector_indexing()
+        
+    def start_indexing_with_metadata(self, metadata: Dict[str, Any]):
+        """Start indexing with specific metadata for new directory"""
+        self.start_indexing()
+        # Store metadata for use during vector indexing
+        self.pending_metadata = metadata
+        
+    def trigger_vector_indexing(self):
+        """Trigger vector indexing of watched directories"""
+        try:
+            from utils.vector_search import VectorSearchEngine
+            
+            vector_engine = VectorSearchEngine(self.config_manager)
+            watched_dirs = self.config_manager.get("file_management.watched_directories", [])
+            
+            for directory in watched_dirs:
+                if Path(directory).exists():
+                    # Use pending metadata if available
+                    metadata = getattr(self, 'pending_metadata', {})
+                    
+                    vector_engine.index_directory(
+                        directory,
+                        fileset_name=metadata.get('fileset_name'),
+                        fileset_description=metadata.get('description'),
+                        tags=metadata.get('tags', [])
+                    )
+                    
+            # Clear pending metadata
+            if hasattr(self, 'pending_metadata'):
+                delattr(self, 'pending_metadata')
+                
+        except Exception as e:
+            logger.warning(f"Vector indexing failed: {e}")
         
     def on_indexing_progress(self, progress: int, current_file: str):
         """Handle indexing progress updates"""
@@ -517,3 +567,151 @@ Directory: {file_info['directory']}
                 name_item = self.file_model.item(index.row(), 0)
                 return name_item.data(Qt.ItemDataRole.UserRole)
         return None
+
+class DirectoryMetadataDialog(QDialog):
+    """Dialog for collecting metadata when adding a directory"""
+    
+    def __init__(self, directory_path: str, parent=None):
+        super().__init__(parent)
+        self.directory_path = directory_path
+        self.setup_ui()
+        
+    def setup_ui(self):
+        """Setup the metadata dialog UI"""
+        self.setWindowTitle("Directory Metadata")
+        self.setModal(True)
+        self.setMinimumSize(500, 400)
+        
+        layout = QVBoxLayout(self)
+        
+        # Header
+        header_label = QLabel(f"<h3>Add Metadata for Directory</h3>")
+        layout.addWidget(header_label)
+        
+        path_label = QLabel(f"<b>Path:</b> {self.directory_path}")
+        path_label.setWordWrap(True)
+        layout.addWidget(path_label)
+        
+        # Form layout
+        form_layout = QFormLayout()
+        
+        # Fileset name
+        self.fileset_name = QLineEdit()
+        self.fileset_name.setText(Path(self.directory_path).name)
+        self.fileset_name.setPlaceholderText("e.g., customer_data, sales_reports")
+        form_layout.addRow("Dataset Name:", self.fileset_name)
+        
+        # Description
+        self.description = QTextEdit()
+        self.description.setMaximumHeight(100)
+        self.description.setPlaceholderText("Describe what this dataset contains and its purpose...")
+        form_layout.addRow("Description:", self.description)
+        
+        # Tags
+        self.tags = QLineEdit()
+        self.tags.setPlaceholderText("customer, analytics, pii, sales (comma-separated)")
+        form_layout.addRow("Tags:", self.tags)
+        
+        # Auto-detect file types
+        self.auto_detect_btn = QPushButton("Auto-Detect File Types")
+        self.auto_detect_btn.clicked.connect(self.auto_detect_files)
+        form_layout.addRow("", self.auto_detect_btn)
+        
+        # File type summary
+        self.file_summary = QLabel("Click 'Auto-Detect' to see file types in this directory")
+        self.file_summary.setStyleSheet("color: #666; font-style: italic;")
+        self.file_summary.setWordWrap(True)
+        form_layout.addRow("File Types:", self.file_summary)
+        
+        layout.addLayout(form_layout)
+        
+        # Buttons
+        button_layout = QHBoxLayout()
+        
+        skip_btn = QPushButton("Skip Metadata")
+        skip_btn.clicked.connect(self.reject)
+        button_layout.addWidget(skip_btn)
+        
+        button_layout.addStretch()
+        
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.clicked.connect(self.reject)
+        button_layout.addWidget(cancel_btn)
+        
+        save_btn = QPushButton("Add Directory")
+        save_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #007bff;
+                color: white;
+                border: none;
+                padding: 8px 16px;
+                border-radius: 4px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #0056b3;
+            }
+        """)
+        save_btn.clicked.connect(self.accept)
+        button_layout.addWidget(save_btn)
+        
+        layout.addWidget(QFrame())  # Spacer
+        layout.addLayout(button_layout)
+        
+    def auto_detect_files(self):
+        """Auto-detect file types in the directory"""
+        try:
+            directory = Path(self.directory_path)
+            file_types = {}
+            total_files = 0
+            
+            for file_path in directory.rglob('*'):
+                if file_path.is_file():
+                    total_files += 1
+                    ext = file_path.suffix.lower()
+                    if ext:
+                        file_types[ext] = file_types.get(ext, 0) + 1
+                    else:
+                        file_types['(no extension)'] = file_types.get('(no extension)', 0) + 1
+                        
+            # Create summary
+            if file_types:
+                summary_parts = []
+                for ext, count in sorted(file_types.items(), key=lambda x: x[1], reverse=True)[:5]:
+                    summary_parts.append(f"{ext}: {count}")
+                    
+                summary = f"Found {total_files} files: " + ", ".join(summary_parts)
+                if len(file_types) > 5:
+                    summary += f" and {len(file_types) - 5} more types"
+                    
+                self.file_summary.setText(summary)
+                
+                # Auto-suggest tags based on file types
+                suggested_tags = []
+                if '.csv' in file_types or '.xlsx' in file_types:
+                    suggested_tags.append('data')
+                if '.py' in file_types:
+                    suggested_tags.append('code')
+                if '.md' in file_types or '.txt' in file_types:
+                    suggested_tags.append('documentation')
+                if '.json' in file_types:
+                    suggested_tags.append('config')
+                    
+                if suggested_tags and not self.tags.text():
+                    self.tags.setText(', '.join(suggested_tags))
+            else:
+                self.file_summary.setText("No files found in directory")
+                
+        except Exception as e:
+            self.file_summary.setText(f"Error scanning directory: {str(e)}")
+            
+    def get_metadata(self) -> Dict[str, Any]:
+        """Get the collected metadata"""
+        tags_list = [tag.strip() for tag in self.tags.text().split(',') if tag.strip()]
+        
+        return {
+            'fileset_name': self.fileset_name.text().strip(),
+            'description': self.description.toPlainText().strip(),
+            'tags': tags_list,
+            'directory_path': self.directory_path
+        }

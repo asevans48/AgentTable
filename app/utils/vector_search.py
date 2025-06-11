@@ -124,6 +124,11 @@ class VectorSearchEngine:
                     content_preview TEXT,
                     file_type TEXT,
                     file_size INTEGER,
+                    fileset_name TEXT,
+                    fileset_description TEXT,
+                    schema_info TEXT,
+                    tags TEXT,
+                    user_description TEXT,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     indexed_at TIMESTAMP,
@@ -138,9 +143,24 @@ class VectorSearchEngine:
                     document_id INTEGER,
                     chunk_index INTEGER,
                     content TEXT NOT NULL,
+                    enhanced_content TEXT,
                     embedding_id TEXT,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (document_id) REFERENCES documents (id)
+                )
+            """)
+            
+            # Create filesets table for dataset management
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS filesets (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT UNIQUE NOT NULL,
+                    description TEXT,
+                    schema_info TEXT,
+                    tags TEXT,
+                    created_by TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
             
@@ -319,8 +339,9 @@ class VectorSearchEngine:
                 
         return chunks
         
-    def index_document(self, file_path: str) -> bool:
-        """Index a single document"""
+    def index_document(self, file_path: str, fileset_name: str = None, fileset_description: str = None, 
+                      schema_info: str = None, tags: List[str] = None, user_description: str = None) -> bool:
+        """Index a single document with enhanced metadata"""
         try:
             file_path = str(Path(file_path).resolve())
             file_hash = self._get_file_hash(file_path)
@@ -356,14 +377,35 @@ class VectorSearchEngine:
             title = Path(file_path).stem
             content_preview = content[:200] + "..." if len(content) > 200 else content
             
-            # Insert or update document record
+            # Detect schema for structured files
+            detected_schema = self._detect_schema(file_path, content)
+            final_schema = schema_info or detected_schema
+            
+            # Auto-generate fileset name if not provided
+            if not fileset_name:
+                fileset_name = self._generate_fileset_name(file_path)
+                
+            # Convert tags to string
+            tags_str = ','.join(tags) if tags else ''
+            
+            # Insert or update document record with enhanced metadata
             cursor.execute("""
                 INSERT OR REPLACE INTO documents 
-                (file_path, file_hash, title, content_preview, file_type, file_size, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-            """, (file_path, file_hash, title, content_preview, file_type, file_size, datetime.now()))
+                (file_path, file_hash, title, content_preview, file_type, file_size, 
+                 fileset_name, fileset_description, schema_info, tags, user_description, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (file_path, file_hash, title, content_preview, file_type, file_size,
+                  fileset_name, fileset_description, final_schema, tags_str, user_description, datetime.now()))
             
             document_id = cursor.lastrowid
+            
+            # Update or create fileset record
+            if fileset_name:
+                cursor.execute("""
+                    INSERT OR REPLACE INTO filesets 
+                    (name, description, schema_info, tags, updated_at)
+                    VALUES (?, ?, ?, ?, ?)
+                """, (fileset_name, fileset_description, final_schema, tags_str, datetime.now()))
             
             # Delete existing chunks for this document
             cursor.execute("DELETE FROM chunks WHERE document_id = ?", (document_id,))
@@ -374,18 +416,23 @@ class VectorSearchEngine:
             # Load model if needed
             self._load_model()
             
-            # Generate embeddings and store chunks
+            # Generate embeddings and store chunks with enhanced content
             for i, chunk in enumerate(chunks):
                 embedding_id = f"{document_id}_{i}"
                 
-                cursor.execute("""
-                    INSERT INTO chunks (document_id, chunk_index, content, embedding_id)
-                    VALUES (?, ?, ?, ?)
-                """, (document_id, i, chunk, embedding_id))
+                # Create enhanced content that includes metadata for better search
+                enhanced_content = self._create_enhanced_content(
+                    chunk, title, fileset_name, fileset_description, tags, user_description, final_schema
+                )
                 
-                # Generate and cache embedding
+                cursor.execute("""
+                    INSERT INTO chunks (document_id, chunk_index, content, enhanced_content, embedding_id)
+                    VALUES (?, ?, ?, ?, ?)
+                """, (document_id, i, chunk, enhanced_content, embedding_id))
+                
+                # Generate and cache embedding using enhanced content
                 try:
-                    embedding = self.model.encode([chunk])[0]
+                    embedding = self.model.encode([enhanced_content])[0]
                     embedding_file = self.embeddings_path / f"{embedding_id}.npy"
                     np.save(embedding_file, embedding)
                 except Exception as e:
@@ -401,25 +448,33 @@ class VectorSearchEngine:
             conn.commit()
             conn.close()
             
-            logger.info(f"Indexed document {file_path} with {len(chunks)} chunks")
+            logger.info(f"Indexed document {file_path} with {len(chunks)} chunks in fileset '{fileset_name}'")
             return True
             
         except Exception as e:
             logger.error(f"Error indexing document {file_path}: {e}")
             return False
             
-    def index_directory(self, directory_path: str, file_extensions: List[str] = None) -> Dict[str, Any]:
-        """Index all supported files in a directory"""
+    def index_directory(self, directory_path: str, file_extensions: List[str] = None, 
+                       fileset_name: str = None, fileset_description: str = None,
+                       tags: List[str] = None) -> Dict[str, Any]:
+        """Index all supported files in a directory with dataset metadata"""
         if file_extensions is None:
             file_extensions = ['.txt', '.md', '.py', '.json', '.csv', '.sql']
             
         directory_path = Path(directory_path)
+        
+        # Auto-generate fileset name if not provided
+        if not fileset_name:
+            fileset_name = directory_path.name
+            
         results = {
             'total_files': 0,
             'indexed_files': 0,
             'failed_files': 0,
             'skipped_files': 0,
-            'errors': []
+            'errors': [],
+            'fileset_name': fileset_name
         }
         
         try:
@@ -431,10 +486,15 @@ class VectorSearchEngine:
                     
             results['total_files'] = len(all_files)
             
-            # Second pass: index files
+            # Second pass: index files with metadata
             for file_path in all_files:
                 try:
-                    if self.index_document(str(file_path)):
+                    if self.index_document(
+                        str(file_path), 
+                        fileset_name=fileset_name,
+                        fileset_description=fileset_description,
+                        tags=tags
+                    ):
                         results['indexed_files'] += 1
                         logger.debug(f"Successfully indexed: {file_path}")
                     else:
@@ -630,6 +690,81 @@ class VectorSearchEngine:
             logger.error(f"Error clearing index: {e}")
             raise
             
+    def get_filesets(self) -> List[Dict[str, Any]]:
+        """Get all filesets/datasets"""
+        try:
+            db_path_str = str(self.vector_db_path.resolve())
+            if not Path(db_path_str).exists():
+                return []
+                
+            conn = sqlite3.connect(db_path_str)
+            cursor = conn.cursor()
+            
+            cursor.execute("""
+                SELECT f.name, f.description, f.schema_info, f.tags, f.created_at,
+                       COUNT(d.id) as file_count
+                FROM filesets f
+                LEFT JOIN documents d ON f.name = d.fileset_name
+                GROUP BY f.name, f.description, f.schema_info, f.tags, f.created_at
+                ORDER BY f.updated_at DESC
+            """)
+            
+            results = []
+            for row in cursor.fetchall():
+                results.append({
+                    'name': row[0],
+                    'description': row[1],
+                    'schema_info': row[2],
+                    'tags': row[3].split(',') if row[3] else [],
+                    'created_at': row[4],
+                    'file_count': row[5]
+                })
+                
+            conn.close()
+            return results
+            
+        except Exception as e:
+            logger.error(f"Error getting filesets: {e}")
+            return []
+            
+    def update_document_metadata(self, file_path: str, fileset_name: str = None, 
+                               fileset_description: str = None, tags: List[str] = None,
+                               user_description: str = None) -> bool:
+        """Update metadata for an existing document"""
+        try:
+            db_path_str = str(self.vector_db_path.resolve())
+            if not Path(db_path_str).exists():
+                return False
+                
+            conn = sqlite3.connect(db_path_str)
+            cursor = conn.cursor()
+            
+            # Update document metadata
+            tags_str = ','.join(tags) if tags else ''
+            cursor.execute("""
+                UPDATE documents 
+                SET fileset_name = ?, fileset_description = ?, tags = ?, user_description = ?, updated_at = ?
+                WHERE file_path = ?
+            """, (fileset_name, fileset_description, tags_str, user_description, datetime.now(), file_path))
+            
+            # Update fileset if provided
+            if fileset_name:
+                cursor.execute("""
+                    INSERT OR REPLACE INTO filesets 
+                    (name, description, tags, updated_at)
+                    VALUES (?, ?, ?, ?)
+                """, (fileset_name, fileset_description, tags_str, datetime.now()))
+            
+            conn.commit()
+            conn.close()
+            
+            logger.info(f"Updated metadata for document: {file_path}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error updating document metadata: {e}")
+            return False
+            
     def rebuild_index(self, directories: List[str]) -> Dict[str, Any]:
         """Rebuild the entire vector search index"""
         try:
@@ -715,12 +850,29 @@ class VectorSearchEngine:
             
             conn.close()
             
+            # Get fileset count
+            cursor.execute("SELECT COUNT(*) FROM filesets")
+            fileset_count = cursor.fetchone()[0]
+            
+            # Get top tags
+            cursor.execute("""
+                SELECT tags, COUNT(*) as count
+                FROM documents 
+                WHERE tags IS NOT NULL AND tags != ''
+                GROUP BY tags
+                ORDER BY count DESC
+                LIMIT 10
+            """)
+            top_tags = dict(cursor.fetchall())
+            
             return {
                 'document_count': doc_count,
                 'chunk_count': chunk_count,
+                'fileset_count': fileset_count,
                 'total_size_bytes': total_size,
                 'file_types': file_types,
                 'recent_indexing_count': recent_count,
+                'top_tags': top_tags,
                 'embeddings_path': str(self.embeddings_path),
                 'database_path': str(self.vector_db_path)
             }
