@@ -222,46 +222,95 @@ class SearchWorker(QThread):
             self.error_occurred.emit(str(e))
             
     def perform_vector_search(self) -> List[Dict[str, Any]]:
-        """Perform vector search (placeholder implementation)"""
-        import time
-        time.sleep(1)  # Simulate processing
-        
-        # Mock results for demonstration
-        return [
-            {
-                'title': 'Customer Data Analysis Report',
-                'source_type': 'Document',
-                'source_path': '/documents/reports/customer_analysis_2024.pdf',
-                'summary': 'Comprehensive analysis of customer behavior patterns and preferences based on 2024 data. Includes demographic breakdowns, purchase patterns, and recommendations for marketing strategies.',
-                'owner': 'Data Team',
-                'last_modified': '2024-12-15',
-                'access_level': 'Full',
-                'can_chat': True,
-                'score': 0.95
-            },
-            {
-                'title': 'Sales Performance Dataset',
-                'source_type': 'Dataset',
-                'source_path': 'bigquery://project.dataset.sales_performance',
-                'summary': 'Monthly sales performance data including revenue, units sold, and regional breakdowns. Updated daily with latest transaction data.',
-                'owner': 'Sales Team',
-                'last_modified': '2024-12-20',
-                'access_level': 'Read-Only',
-                'can_chat': True,
-                'score': 0.87
-            },
-            {
-                'title': 'Market Research Survey Results',
-                'source_type': 'Spreadsheet',
-                'source_path': '/shared/surveys/market_research_q4_2024.xlsx',
-                'summary': 'Q4 2024 market research survey responses from 1,200 participants. Includes satisfaction scores, feature requests, and competitive analysis.',
-                'owner': 'Marketing Team',
-                'last_modified': '2024-12-10',
+        """Perform vector search using the vector search engine"""
+        try:
+            from utils.vector_search import VectorSearchEngine
+            
+            vector_engine = VectorSearchEngine(self.config_manager)
+            results = vector_engine.search(
+                self.query, 
+                max_results=20,
+                similarity_threshold=0.3
+            )
+            
+            # Transform results to match expected format
+            transformed_results = []
+            for result in results:
+                if 'error' in result:
+                    transformed_results.append({
+                        'title': 'Vector Search Error',
+                        'source_type': 'Error',
+                        'source_path': 'system',
+                        'summary': result.get('message', 'Unknown error'),
+                        'owner': 'System',
+                        'last_modified': '',
+                        'access_level': 'Full',
+                        'can_chat': False,
+                        'score': 0.0
+                    })
+                elif 'message' in result:
+                    transformed_results.append({
+                        'title': 'Vector Search Info',
+                        'source_type': 'Info',
+                        'source_path': 'system',
+                        'summary': result['message'],
+                        'owner': 'System',
+                        'last_modified': '',
+                        'access_level': 'Full',
+                        'can_chat': False,
+                        'score': 0.0
+                    })
+                else:
+                    # Format content preview
+                    content = result['content']
+                    if len(content) > 200:
+                        content = content[:200] + "..."
+                        
+                    # Get file name from path
+                    from pathlib import Path
+                    file_name = Path(result.get('file_path', 'Unknown')).name
+                        
+                    transformed_results.append({
+                        'title': result.get('title', 'Untitled'),
+                        'source_type': 'Document',
+                        'source_path': result.get('file_path', 'Unknown'),
+                        'summary': content,
+                        'owner': 'File System',
+                        'last_modified': '',
+                        'access_level': 'Full',
+                        'can_chat': True,
+                        'score': result.get('similarity', 0.0),
+                        'file_type': result.get('file_type', ''),
+                        'chunk_index': result.get('chunk_index', 0),
+                        'document_id': result.get('document_id')
+                    })
+                    
+            return transformed_results
+            
+        except ImportError:
+            return [{
+                'title': 'Vector Search Unavailable',
+                'source_type': 'Error',
+                'source_path': 'system',
+                'summary': 'Vector search dependencies not installed. Please install: pip install sentence-transformers faiss-cpu numpy',
+                'owner': 'System',
+                'last_modified': '',
                 'access_level': 'Full',
                 'can_chat': False,
-                'score': 0.79
-            }
-        ]
+                'score': 0.0
+            }]
+        except Exception as e:
+            return [{
+                'title': 'Vector Search Error',
+                'source_type': 'Error',
+                'source_path': 'system',
+                'summary': f'Error performing vector search: {str(e)}',
+                'owner': 'System',
+                'last_modified': '',
+                'access_level': 'Full',
+                'can_chat': False,
+                'score': 0.0
+            }]
         
     def search_datasets(self) -> List[Dict[str, Any]]:
         """Search registered datasets"""

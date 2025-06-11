@@ -91,6 +91,15 @@ class ConfigManager:
                 "password_manager": "system",
                 "ssl_verification": True
             },
+            "vector_search": {
+                "database_path": "data/vector_search.db",
+                "embeddings_path": "data/embeddings",
+                "model": "all-MiniLM-L6-v2",
+                "max_chunk_size": 512,
+                "chunk_overlap": 50,
+                "similarity_threshold": 0.3,
+                "max_results": 25
+            },
             "ui_preferences": {
                 "theme": "system",
                 "layout": "default",
