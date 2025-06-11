@@ -237,21 +237,48 @@ class SearchWorker(QThread):
             from utils.vector_search import VectorSearchEngine
             
             vector_engine = VectorSearchEngine(self.config_manager)
+            
+            # First test the search functionality
+            test_result = vector_engine.test_search_functionality()
+            if test_result['status'] == 'failed':
+                return [{
+                    'title': 'Vector Search Setup Error',
+                    'source_type': 'Error',
+                    'source_path': 'system',
+                    'summary': f"Vector search is not properly configured: {test_result.get('error', 'Unknown error')}",
+                    'owner': 'System',
+                    'last_modified': '',
+                    'access_level': 'Full',
+                    'can_chat': False,
+                    'score': 0.0
+                }]
+            
+            # Perform the actual search
             results = vector_engine.search(
                 self.query, 
                 max_results=20,
-                similarity_threshold=0.3
+                similarity_threshold=0.2  # Lower threshold to get more results
             )
             
             # Transform results to match expected format
             transformed_results = []
             for result in results:
                 if 'error' in result:
+                    # Show detailed error information
+                    error_summary = result.get('message', 'Unknown error')
+                    if 'debug_info' in result:
+                        debug_info = result['debug_info']
+                        error_summary += f"\n\nDebug Info:\n"
+                        error_summary += f"• Processed chunks: {debug_info.get('processed_chunks', 0)}\n"
+                        error_summary += f"• Missing embeddings: {debug_info.get('missing_embeddings', 0)}\n"
+                        error_summary += f"• Similarity threshold: {debug_info.get('similarity_threshold', 0.3)}\n"
+                        error_summary += f"• Database: {debug_info.get('database_path', 'Unknown')}"
+                    
                     transformed_results.append({
                         'title': 'Vector Search Error',
                         'source_type': 'Error',
                         'source_path': 'system',
-                        'summary': result.get('message', 'Unknown error'),
+                        'summary': error_summary,
                         'owner': 'System',
                         'last_modified': '',
                         'access_level': 'Full',
@@ -259,11 +286,28 @@ class SearchWorker(QThread):
                         'score': 0.0
                     })
                 elif 'message' in result:
+                    # Show informational messages with debug details
+                    info_summary = result['message']
+                    if 'suggestion' in result:
+                        info_summary += f"\n\nSuggestion: {result['suggestion']}"
+                    if 'debug_info' in result:
+                        debug_info = result['debug_info']
+                        info_summary += f"\n\nDebug Info:\n"
+                        info_summary += f"• Processed chunks: {debug_info.get('processed_chunks', 0)}\n"
+                        info_summary += f"• Missing embeddings: {debug_info.get('missing_embeddings', 0)}\n"
+                        info_summary += f"• Similarity threshold: {debug_info.get('similarity_threshold', 0.3)}"
+                    if 'stats' in result:
+                        stats = result['stats']
+                        info_summary += f"\n\nDatabase Stats:\n"
+                        info_summary += f"• Total documents: {stats.get('total_documents', 0)}\n"
+                        info_summary += f"• Indexed documents: {stats.get('indexed_documents', 0)}\n"
+                        info_summary += f"• Total chunks: {stats.get('total_chunks', 0)}"
+                    
                     transformed_results.append({
                         'title': 'Vector Search Info',
                         'source_type': 'Info',
                         'source_path': 'system',
-                        'summary': result['message'],
+                        'summary': info_summary,
                         'owner': 'System',
                         'last_modified': '',
                         'access_level': 'Full',
@@ -295,6 +339,10 @@ class SearchWorker(QThread):
                     summary_parts.append(content)
                     enhanced_summary = '\n'.join(summary_parts)
                     
+                    # Add similarity score to summary
+                    similarity_score = result.get('similarity', 0.0)
+                    enhanced_summary += f"\n\n🎯 Similarity: {similarity_score:.3f}"
+                    
                     # Determine if this is a dataset or file
                     is_dataset = result.get('file_path', '').startswith('dataset://')
                     source_type = 'Dataset' if is_dataset else 'Document'
@@ -308,7 +356,7 @@ class SearchWorker(QThread):
                         'last_modified': '',
                         'access_level': 'Full',
                         'can_chat': True,
-                        'score': result.get('similarity', 0.0),
+                        'score': similarity_score,
                         'file_type': result.get('file_type', ''),
                         'chunk_index': result.get('chunk_index', 0),
                         'document_id': result.get('document_id'),
@@ -334,11 +382,12 @@ class SearchWorker(QThread):
                 'score': 0.0
             }]
         except Exception as e:
+            import traceback
             return [{
                 'title': 'Vector Search Error',
                 'source_type': 'Error',
                 'source_path': 'system',
-                'summary': f'Error performing vector search: {str(e)}',
+                'summary': f'Error performing vector search: {str(e)}\n\nTraceback:\n{traceback.format_exc()}',
                 'owner': 'System',
                 'last_modified': '',
                 'access_level': 'Full',

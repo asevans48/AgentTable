@@ -292,11 +292,30 @@ class VectorSearchEngine:
         if self.model is None:
             try:
                 logger.info(f"Loading embedding model: {self.model_name}")
+                
+                # Try to load the model with error handling
                 self.model = SentenceTransformer(self.model_name)
-                logger.info("Embedding model loaded successfully")
+                
+                # Test the model with a simple encoding
+                test_embedding = self.model.encode(["test"])
+                logger.info(f"Embedding model loaded successfully. Test embedding shape: {test_embedding.shape}")
+                
             except Exception as e:
-                logger.error(f"Error loading embedding model: {e}")
-                raise
+                logger.error(f"Error loading embedding model {self.model_name}: {e}")
+                
+                # Try fallback model
+                try:
+                    fallback_model = "all-MiniLM-L6-v2"
+                    if self.model_name != fallback_model:
+                        logger.info(f"Trying fallback model: {fallback_model}")
+                        self.model = SentenceTransformer(fallback_model)
+                        test_embedding = self.model.encode(["test"])
+                        logger.info(f"Fallback model loaded successfully. Test embedding shape: {test_embedding.shape}")
+                    else:
+                        raise e
+                except Exception as fallback_error:
+                    logger.error(f"Fallback model also failed: {fallback_error}")
+                    raise e
                 
     def _get_file_hash(self, file_path: str) -> str:
         """Get hash of file content for change detection"""
@@ -1250,23 +1269,59 @@ class VectorSearchEngine:
             
         try:
             start_time = datetime.now()
+            logger.info(f"Starting vector search for query: '{query}' with threshold: {similarity_threshold}")
             
             # Load model if needed
-            self._load_model()
+            try:
+                self._load_model()
+                if self.model is None:
+                    return [{
+                        'error': 'Model loading failed',
+                        'message': 'Could not load the sentence transformer model'
+                    }]
+            except Exception as e:
+                logger.error(f"Failed to load model: {e}")
+                return [{
+                    'error': 'Model loading failed',
+                    'message': f'Error loading model: {str(e)}'
+                }]
             
             # Generate query embedding
-            query_embedding = self.model.encode([query])[0]
+            try:
+                query_embedding = self.model.encode([query])[0]
+                logger.debug(f"Generated query embedding with shape: {query_embedding.shape}")
+            except Exception as e:
+                logger.error(f"Failed to generate query embedding: {e}")
+                return [{
+                    'error': 'Query encoding failed',
+                    'message': f'Error encoding query: {str(e)}'
+                }]
             
             # Get all chunks from database using absolute path
             db_path_str = str(self.vector_db_path.resolve())
             if not Path(db_path_str).exists():
+                logger.error(f"Vector database not found at: {db_path_str}")
                 return [{
                     'message': 'Vector database not found',
-                    'suggestion': 'Please rebuild the vector search index'
+                    'suggestion': 'Please rebuild the vector search index',
+                    'database_path': db_path_str
                 }]
                 
             conn = sqlite3.connect(db_path_str)
             cursor = conn.cursor()
+            
+            # First check if we have any documents at all
+            cursor.execute("SELECT COUNT(*) FROM documents")
+            total_docs = cursor.fetchone()[0]
+            logger.info(f"Total documents in database: {total_docs}")
+            
+            cursor.execute("SELECT COUNT(*) FROM documents WHERE indexed_at IS NOT NULL")
+            indexed_docs = cursor.fetchone()[0]
+            logger.info(f"Indexed documents: {indexed_docs}")
+            
+            cursor.execute("SELECT COUNT(*) FROM chunks")
+            total_chunks = cursor.fetchone()[0]
+            logger.info(f"Total chunks: {total_chunks}")
             
             cursor.execute("""
                 SELECT c.id, c.document_id, c.chunk_index, c.content, c.embedding_id,
@@ -1278,33 +1333,52 @@ class VectorSearchEngine:
             """)
             
             chunks = cursor.fetchall()
+            logger.info(f"Retrieved {len(chunks)} chunks for search")
             
             if not chunks:
                 conn.close()
                 return [{
                     'message': 'No indexed documents found',
-                    'suggestion': 'Please index some documents first'
+                    'suggestion': 'Please index some documents first',
+                    'stats': {
+                        'total_documents': total_docs,
+                        'indexed_documents': indexed_docs,
+                        'total_chunks': total_chunks
+                    }
                 }]
                 
             # Calculate similarities
             results = []
+            processed_chunks = 0
+            missing_embeddings = 0
             
             for chunk_data in chunks:
                 (chunk_id, doc_id, chunk_idx, content, embedding_id, file_path, title, file_type,
                  fileset_name, fileset_description, schema_info, tags, user_description) = chunk_data
                 
+                processed_chunks += 1
+                
                 # Load embedding
                 embedding_file = self.embeddings_path / f"{embedding_id}.npy"
                 if not embedding_file.exists():
+                    missing_embeddings += 1
+                    logger.debug(f"Missing embedding file: {embedding_file}")
                     continue
                     
                 try:
                     chunk_embedding = np.load(embedding_file)
                     
+                    # Ensure embeddings are the same dimension
+                    if chunk_embedding.shape != query_embedding.shape:
+                        logger.warning(f"Embedding dimension mismatch: query={query_embedding.shape}, chunk={chunk_embedding.shape}")
+                        continue
+                    
                     # Calculate cosine similarity
                     similarity = np.dot(query_embedding, chunk_embedding) / (
                         np.linalg.norm(query_embedding) * np.linalg.norm(chunk_embedding)
                     )
+                    
+                    logger.debug(f"Chunk {chunk_id} similarity: {similarity:.4f} (threshold: {similarity_threshold})")
                     
                     if similarity >= similarity_threshold:
                         results.append({
@@ -1322,34 +1396,60 @@ class VectorSearchEngine:
                             'tags': tags or '',
                             'user_description': user_description or ''
                         })
+                        logger.debug(f"Added result with similarity {similarity:.4f}")
                         
                 except Exception as e:
                     logger.warning(f"Error processing embedding {embedding_id}: {e}")
                     continue
                     
+            logger.info(f"Processed {processed_chunks} chunks, {missing_embeddings} missing embeddings, found {len(results)} results above threshold")
+                    
             # Sort by similarity and limit results
             results.sort(key=lambda x: x['similarity'], reverse=True)
             results = results[:max_results]
             
-            # Log search
+            # Log search to database
+            try:
+                search_time = (datetime.now() - start_time).total_seconds()
+                cursor.execute("""
+                    INSERT INTO search_history (query, search_type, results_count, search_time)
+                    VALUES (?, ?, ?, ?)
+                """, (query, 'vector_search', len(results), search_time))
+                
+                conn.commit()
+            except Exception as e:
+                logger.warning(f"Failed to log search history: {e}")
+            finally:
+                conn.close()
+            
             search_time = (datetime.now() - start_time).total_seconds()
-            cursor.execute("""
-                INSERT INTO search_history (query, search_type, results_count, search_time)
-                VALUES (?, ?, ?, ?)
-            """, (query, 'vector_search', len(results), search_time))
-            
-            conn.commit()
-            conn.close()
-            
             logger.info(f"Vector search for '{query}' returned {len(results)} results in {search_time:.2f}s")
+            
+            # If no results found, return helpful debug info
+            if not results:
+                return [{
+                    'message': f'No results found for query: "{query}"',
+                    'suggestion': 'Try lowering the similarity threshold or using different keywords',
+                    'debug_info': {
+                        'processed_chunks': processed_chunks,
+                        'missing_embeddings': missing_embeddings,
+                        'similarity_threshold': similarity_threshold,
+                        'query_length': len(query),
+                        'embeddings_path': str(self.embeddings_path),
+                        'database_path': str(self.vector_db_path)
+                    }
+                }]
             
             return results
             
         except Exception as e:
             logger.error(f"Error performing vector search: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
             return [{
                 'error': 'Search failed',
-                'message': str(e)
+                'message': str(e),
+                'traceback': traceback.format_exc()
             }]
             
     def get_indexed_documents(self) -> List[Dict[str, Any]]:
@@ -1617,8 +1717,6 @@ class VectorSearchEngine:
             """)
             recent_count = cursor.fetchone()[0]
             
-            conn.close()
-            
             # Get fileset count
             cursor.execute("SELECT COUNT(*) FROM filesets")
             fileset_count = cursor.fetchone()[0]
@@ -1634,16 +1732,67 @@ class VectorSearchEngine:
             """)
             top_tags = dict(cursor.fetchall())
             
+            # Count embedding files
+            embedding_count = 0
+            if self.embeddings_path.exists():
+                embedding_count = len(list(self.embeddings_path.glob("*.npy")))
+            
+            conn.close()
+            
             return {
                 'document_count': doc_count,
                 'chunk_count': chunk_count,
+                'embedding_count': embedding_count,
+                'fileset_count': fileset_count,
                 'total_size_bytes': total_size,
                 'file_types': file_types,
                 'recent_indexing_count': recent_count,
+                'top_tags': top_tags,
                 'embeddings_path': str(self.embeddings_path),
-                'database_path': str(self.vector_db_path)
+                'database_path': str(self.vector_db_path),
+                'status': 'Ready' if doc_count > 0 else 'No documents indexed'
             }
             
         except Exception as e:
             logger.error(f"Error getting index stats: {e}")
-            return {}
+            return {
+                'status': f'Error: {str(e)}',
+                'embeddings_path': str(self.embeddings_path),
+                'database_path': str(self.vector_db_path)
+            }
+    
+    def test_search_functionality(self) -> Dict[str, Any]:
+        """Test the search functionality with debug information"""
+        try:
+            # Test model loading
+            self._load_model()
+            if self.model is None:
+                return {'status': 'failed', 'error': 'Model failed to load'}
+            
+            # Test database connection
+            db_path_str = str(self.vector_db_path.resolve())
+            if not Path(db_path_str).exists():
+                return {'status': 'failed', 'error': 'Database not found', 'path': db_path_str}
+            
+            # Get basic stats
+            stats = self.get_index_stats()
+            
+            # Test a simple search
+            test_results = self.search("test", max_results=1, similarity_threshold=0.0)
+            
+            return {
+                'status': 'success',
+                'model_loaded': self.model is not None,
+                'database_exists': True,
+                'stats': stats,
+                'test_search_results': len(test_results),
+                'test_results_sample': test_results[:1] if test_results else []
+            }
+            
+        except Exception as e:
+            return {
+                'status': 'failed',
+                'error': str(e),
+                'database_path': str(self.vector_db_path),
+                'embeddings_path': str(self.embeddings_path)
+            }
