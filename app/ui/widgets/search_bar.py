@@ -66,48 +66,6 @@ class SearchBar(QWidget):
         self.search_type_combo.setToolTip("Select search type")
         search_layout.addWidget(self.search_type_combo)
         
-        # Tags filter
-        self.tags_filter = QComboBox()
-        self.tags_filter.setEditable(True)
-        self.tags_filter.setPlaceholderText("Filter by tags...")
-        self.tags_filter.addItem("All Tags")
-        self.tags_filter.setMinimumWidth(120)
-        self.tags_filter.setToolTip("Filter results by tags")
-        self.tags_filter.setStyleSheet("""
-            QComboBox {
-                padding: 6px 8px;
-                border: 1px solid #ddd;
-                border-radius: 4px;
-                background-color: white;
-                font-size: 10pt;
-            }
-            QComboBox:hover {
-                border-color: #007bff;
-            }
-        """)
-        search_layout.addWidget(self.tags_filter)
-        
-        # Folder filter
-        self.folder_filter = QComboBox()
-        self.folder_filter.setEditable(True)
-        self.folder_filter.setPlaceholderText("Filter by folder...")
-        self.folder_filter.addItem("All Folders")
-        self.folder_filter.setMinimumWidth(120)
-        self.folder_filter.setToolTip("Filter results by folder")
-        self.folder_filter.setStyleSheet("""
-            QComboBox {
-                padding: 6px 8px;
-                border: 1px solid #ddd;
-                border-radius: 4px;
-                background-color: white;
-                font-size: 10pt;
-            }
-            QComboBox:hover {
-                border-color: #007bff;
-            }
-        """)
-        search_layout.addWidget(self.folder_filter)
-        
         # Main search input
         self.search_input = QLineEdit()
         self.search_input.setPlaceholderText("Search documents, chat with data, or enter SQL queries...")
@@ -253,11 +211,6 @@ class SearchBar(QWidget):
         self.search_input.returnPressed.connect(self.perform_search)
         self.search_type_combo.currentTextChanged.connect(self.on_search_type_changed)
         
-        # Filter connections
-        self.tags_filter.currentTextChanged.connect(self.on_filter_changed)
-        self.folder_filter.currentTextChanged.connect(self.on_filter_changed)
-        self.tags_filter.editTextChanged.connect(self.on_filter_changed)
-        self.folder_filter.editTextChanged.connect(self.on_filter_changed)
         
         # Setup keyboard shortcuts
         search_shortcut = QShortcut(QKeySequence("Ctrl+F"), self)
@@ -293,31 +246,16 @@ class SearchBar(QWidget):
             
         search_type = self.search_type_combo.currentText()
         
-        # Get filter values
-        tags_filter = self.tags_filter.currentText() if self.tags_filter.currentText() != "All Tags" else ""
-        folder_filter = self.folder_filter.currentText() if self.folder_filter.currentText() != "All Folders" else ""
-        
-        # Create enhanced query with filters
-        enhanced_query = query
-        filters = {}
-        
-        if tags_filter:
-            filters['tags'] = tags_filter
-            enhanced_query += f" tags:{tags_filter}"
-        if folder_filter:
-            filters['folder'] = folder_filter
-            enhanced_query += f" folder:{folder_filter}"
-        
         # Add to search history
         self.add_to_history(query)
         
-        # Emit appropriate signal with enhanced query
+        # Emit appropriate signal
         if search_type == "AI Chat":
-            self.chat_triggered.emit(enhanced_query)
+            self.chat_triggered.emit(query)
         else:
-            self.search_triggered.emit(enhanced_query, search_type)
+            self.search_triggered.emit(query, search_type)
             
-        logger.info(f"Performing {search_type}: {enhanced_query}")
+        logger.info(f"Performing {search_type}: {query}")
         
     def add_to_history(self, query):
         """Add query to search history"""
@@ -404,72 +342,11 @@ class SearchBar(QWidget):
         recent = self.config_manager.get("ui_preferences.recent_searches", [])
         self.search_history = recent[:10]  # Limit to 10
         self.update_quick_filters()
-        self.update_filter_options()
         
     def save_recent_searches(self):
         """Save recent searches to config"""
         self.config_manager.set("ui_preferences.recent_searches", self.search_history)
         
-    def update_filter_options(self):
-        """Update filter dropdown options based on available data"""
-        try:
-            # Get all available tags from file metadata
-            file_metadata = self.config_manager.get("file_management.file_metadata", {})
-            all_tags = set()
-            all_folders = set()
-            
-            for file_path, metadata in file_metadata.items():
-                # Collect tags
-                tags = metadata.get('tags', [])
-                all_tags.update(tags)
-                
-                # Collect folder names
-                from pathlib import Path
-                folder_name = Path(file_path).parent.name
-                if folder_name:
-                    all_folders.add(folder_name)
-            
-            # Update tags filter
-            current_tags_text = self.tags_filter.currentText()
-            self.tags_filter.clear()
-            self.tags_filter.addItem("All Tags")
-            for tag in sorted(all_tags):
-                self.tags_filter.addItem(tag)
-            
-            # Restore current selection if it still exists
-            if current_tags_text and current_tags_text != "All Tags":
-                index = self.tags_filter.findText(current_tags_text)
-                if index >= 0:
-                    self.tags_filter.setCurrentIndex(index)
-                else:
-                    self.tags_filter.setEditText(current_tags_text)
-            
-            # Update folder filter
-            current_folder_text = self.folder_filter.currentText()
-            self.folder_filter.clear()
-            self.folder_filter.addItem("All Folders")
-            for folder in sorted(all_folders):
-                self.folder_filter.addItem(folder)
-                
-            # Restore current selection if it still exists
-            if current_folder_text and current_folder_text != "All Folders":
-                index = self.folder_filter.findText(current_folder_text)
-                if index >= 0:
-                    self.folder_filter.setCurrentIndex(index)
-                else:
-                    self.folder_filter.setEditText(current_folder_text)
-                    
-        except Exception as e:
-            logger.warning(f"Error updating filter options: {e}")
-            
-    def on_filter_changed(self):
-        """Handle filter changes - perform search if there's a query"""
-        query = self.search_input.text().strip()
-        if query:
-            self.perform_search()
-        
-        # Update filter options when filters change
-        self.update_filter_options()
         
     def get_current_query(self):
         """Get the current search query"""

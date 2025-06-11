@@ -202,12 +202,11 @@ class SearchWorker(QThread):
     error_occurred = pyqtSignal(str)  # error message
     progress_updated = pyqtSignal(int)  # progress percentage
     
-    def __init__(self, query: str, search_type: str, config_manager, filters: dict = None):
+    def __init__(self, query: str, search_type: str, config_manager):
         super().__init__()
         self.query = query
         self.search_type = search_type
         self.config_manager = config_manager
-        self.filters = filters or {}
         
     def run(self):
         """Run the search in background"""
@@ -488,27 +487,17 @@ class SearchResults(QWidget):
         if not query.strip():
             return
             
-        # Parse enhanced query for filters
-        parsed_query, filters = self.parse_enhanced_query(query)
-        
         # Clear previous results
         self.clear_results()
         
         # Show progress
         self.progress_bar.setVisible(True)
         self.progress_bar.setValue(0)
-        
-        # Update status with filters if present
-        display_query = parsed_query if parsed_query else query
-        status_text = f"Searching for: {display_query}"
-        if filters:
-            filter_text = ", ".join([f"{k}: {v}" for k, v in filters.items()])
-            status_text += f" ({filter_text})"
-        self.status_label.setText(status_text)
+        self.status_label.setText(f"Searching for: {query}")
         self.sort_combo.setVisible(False)
         
-        # Start background search with filters
-        self.search_worker = SearchWorker(parsed_query, search_type, self.config_manager, filters)
+        # Start background search
+        self.search_worker = SearchWorker(query, search_type, self.config_manager)
         self.search_worker.results_ready.connect(self.on_results_ready)
         self.search_worker.error_occurred.connect(self.on_search_error)
         self.search_worker.progress_updated.connect(self.progress_bar.setValue)
@@ -630,27 +619,3 @@ class SearchResults(QWidget):
             sorted_results = self.current_results
             
         self.display_results(sorted_results)
-        
-    def parse_enhanced_query(self, query: str) -> tuple[str, dict]:
-        """Parse enhanced query to extract filters"""
-        filters = {}
-        remaining_query_parts = []
-        
-        # Split query into parts
-        parts = query.split()
-        
-        for part in parts:
-            if ':' in part:
-                key, value = part.split(':', 1)
-                if key.lower() in ['tags', 'tag']:
-                    filters['tags'] = value
-                elif key.lower() in ['folder', 'dir', 'directory']:
-                    filters['folder'] = value
-                else:
-                    # Not a recognized filter, keep as part of query
-                    remaining_query_parts.append(part)
-            else:
-                remaining_query_parts.append(part)
-        
-        cleaned_query = ' '.join(remaining_query_parts)
-        return cleaned_query, filters
