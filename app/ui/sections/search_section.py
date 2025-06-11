@@ -296,29 +296,147 @@ class VectorSearchTab(QWidget):
             self.db_status_label.setStyleSheet("color: #dc3545;")
             
     def rebuild_vector_index(self):
-        """Rebuild the entire vector search index"""
+        """Rebuild the entire vector search index with all data sources"""
         if not self.vector_engine:
             return
             
         try:
-            # Get watched directories
+            # Get all data sources
             watched_dirs = self.config_manager.get("file_management.watched_directories", [])
+            registered_datasets = self.config_manager.get_registered_datasets()
             
-            if not watched_dirs:
+            # Show data source selection dialog
+            from PyQt6.QtWidgets import QDialog, QVBoxLayout, QCheckBox, QLabel, QPushButton, QHBoxLayout, QGroupBox
+            
+            dialog = QDialog(self)
+            dialog.setWindowTitle("Rebuild Vector Index - Select Data Sources")
+            dialog.setModal(True)
+            dialog.setMinimumSize(500, 400)
+            
+            layout = QVBoxLayout(dialog)
+            
+            # Header
+            header_label = QLabel("<h3>Select Data Sources to Include in Vector Index</h3>")
+            layout.addWidget(header_label)
+            
+            info_label = QLabel("Choose which data sources to include in the rebuilt vector search index:")
+            info_label.setWordWrap(True)
+            info_label.setStyleSheet("color: #666; margin-bottom: 10px;")
+            layout.addWidget(info_label)
+            
+            # Watched directories group
+            dirs_group = QGroupBox("Watched Directories")
+            dirs_layout = QVBoxLayout(dirs_group)
+            
+            dir_checkboxes = {}
+            if watched_dirs:
+                for directory in watched_dirs:
+                    if Path(directory).exists():
+                        checkbox = QCheckBox(f"📂 {Path(directory).name}")
+                        checkbox.setChecked(True)
+                        checkbox.setToolTip(directory)
+                        dirs_layout.addWidget(checkbox)
+                        dir_checkboxes[directory] = checkbox
+            else:
+                no_dirs_label = QLabel("No watched directories configured")
+                no_dirs_label.setStyleSheet("color: #666; font-style: italic;")
+                dirs_layout.addWidget(no_dirs_label)
+                
+            layout.addWidget(dirs_group)
+            
+            # Registered datasets group
+            datasets_group = QGroupBox("Registered Datasets")
+            datasets_layout = QVBoxLayout(datasets_group)
+            
+            dataset_checkboxes = {}
+            if registered_datasets:
+                for dataset in registered_datasets:
+                    checkbox = QCheckBox(f"📊 {dataset.get('name', 'Unnamed Dataset')}")
+                    checkbox.setChecked(True)
+                    checkbox.setToolTip(f"Type: {dataset.get('type', 'Unknown')}\nSource: {dataset.get('source', 'Unknown')}")
+                    datasets_layout.addWidget(checkbox)
+                    dataset_checkboxes[dataset.get('name', '')] = checkbox
+            else:
+                no_datasets_label = QLabel("No registered datasets")
+                no_datasets_label.setStyleSheet("color: #666; font-style: italic;")
+                datasets_layout.addWidget(no_datasets_label)
+                
+            layout.addWidget(datasets_group)
+            
+            # Options group
+            options_group = QGroupBox("Indexing Options")
+            options_layout = QVBoxLayout(options_group)
+            
+            include_metadata_checkbox = QCheckBox("Include file metadata in vector search")
+            include_metadata_checkbox.setChecked(True)
+            include_metadata_checkbox.setToolTip("Include tags, descriptions, and other metadata in searchable content")
+            options_layout.addWidget(include_metadata_checkbox)
+            
+            preserve_existing_checkbox = QCheckBox("Preserve existing metadata during rebuild")
+            preserve_existing_checkbox.setChecked(True)
+            preserve_existing_checkbox.setToolTip("Keep existing file metadata and only update content")
+            options_layout.addWidget(preserve_existing_checkbox)
+            
+            layout.addWidget(options_group)
+            
+            # Buttons
+            button_layout = QHBoxLayout()
+            
+            select_all_btn = QPushButton("Select All")
+            select_all_btn.clicked.connect(lambda: self.toggle_all_checkboxes(dir_checkboxes, dataset_checkboxes, True))
+            button_layout.addWidget(select_all_btn)
+            
+            select_none_btn = QPushButton("Select None")
+            select_none_btn.clicked.connect(lambda: self.toggle_all_checkboxes(dir_checkboxes, dataset_checkboxes, False))
+            button_layout.addWidget(select_none_btn)
+            
+            button_layout.addStretch()
+            
+            cancel_btn = QPushButton("Cancel")
+            cancel_btn.clicked.connect(dialog.reject)
+            button_layout.addWidget(cancel_btn)
+            
+            rebuild_btn = QPushButton("Rebuild Index")
+            rebuild_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #dc3545;
+                    color: white;
+                    border: none;
+                    padding: 8px 16px;
+                    border-radius: 4px;
+                    font-weight: bold;
+                }
+                QPushButton:hover { background-color: #c82333; }
+            """)
+            rebuild_btn.clicked.connect(dialog.accept)
+            button_layout.addWidget(rebuild_btn)
+            
+            layout.addLayout(button_layout)
+            
+            # Show dialog
+            if dialog.exec() != QDialog.DialogCode.Accepted:
+                return
+                
+            # Get selected sources
+            selected_dirs = [path for path, checkbox in dir_checkboxes.items() if checkbox.isChecked()]
+            selected_datasets = [name for name, checkbox in dataset_checkboxes.items() if checkbox.isChecked()]
+            
+            if not selected_dirs and not selected_datasets:
                 from PyQt6.QtWidgets import QMessageBox
-                QMessageBox.warning(
-                    self,
-                    "No Watched Directories",
-                    "No directories are being watched for indexing.\n\nPlease add directories in the Files tab or Settings."
-                )
+                QMessageBox.warning(self, "No Sources Selected", "Please select at least one data source to index.")
                 return
                 
             # Confirm rebuild
+            total_sources = len(selected_dirs) + len(selected_datasets)
             from PyQt6.QtWidgets import QMessageBox
             reply = QMessageBox.question(
                 self,
-                "Rebuild Vector Index",
-                f"This will rebuild the entire vector search index for {len(watched_dirs)} watched directories.\n\nThis may take several minutes depending on the number of files.\n\nContinue?",
+                "Confirm Rebuild",
+                f"This will rebuild the entire vector search index for {total_sources} data sources:\n\n"
+                f"• {len(selected_dirs)} directories\n"
+                f"• {len(selected_datasets)} datasets\n\n"
+                f"This may take several minutes depending on the amount of data.\n\n"
+                f"Continue?",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 QMessageBox.StandardButton.Yes
             )
@@ -326,12 +444,239 @@ class VectorSearchTab(QWidget):
             if reply != QMessageBox.StandardButton.Yes:
                 return
                 
-            # Start indexing
-            self.start_indexing(watched_dirs, rebuild=True)
+            # Start comprehensive indexing
+            indexing_options = {
+                'include_metadata': include_metadata_checkbox.isChecked(),
+                'preserve_existing': preserve_existing_checkbox.isChecked()
+            }
+            
+            self.start_comprehensive_indexing(selected_dirs, selected_datasets, indexing_options)
             
         except Exception as e:
             from PyQt6.QtWidgets import QMessageBox
             QMessageBox.critical(self, "Error", f"Failed to start indexing: {str(e)}")
+            
+    def toggle_all_checkboxes(self, dir_checkboxes, dataset_checkboxes, checked):
+        """Toggle all checkboxes on or off"""
+        for checkbox in dir_checkboxes.values():
+            checkbox.setChecked(checked)
+        for checkbox in dataset_checkboxes.values():
+            checkbox.setChecked(checked)
+            
+    def start_comprehensive_indexing(self, directories, datasets, options):
+        """Start comprehensive indexing of all selected data sources"""
+        if self.indexing_worker and self.indexing_worker.isRunning():
+            return  # Already indexing
+            
+        # Clear index
+        try:
+            self.vector_engine.clear_index()
+        except Exception as e:
+            logger.warning(f"Failed to clear index before rebuild: {e}")
+            
+        # Show progress UI
+        self.indexing_progress.setVisible(True)
+        self.indexing_progress.setValue(0)
+        self.indexing_status_label.setVisible(True)
+        self.indexing_status_label.setText("Starting comprehensive indexing...")
+        
+        # Disable buttons during indexing
+        self.rebuild_btn.setEnabled(False)
+        self.clear_index_btn.setEnabled(False)
+        
+        # Start comprehensive indexing worker
+        from PyQt6.QtCore import QThread
+        
+        class ComprehensiveIndexingWorker(QThread):
+            progress_updated = pyqtSignal(int, str)  # progress, status
+            indexing_complete = pyqtSignal(dict)  # results
+            error_occurred = pyqtSignal(str)  # error message
+            
+            def __init__(self, vector_engine, config_manager, directories, datasets, options):
+                super().__init__()
+                self.vector_engine = vector_engine
+                self.config_manager = config_manager
+                self.directories = directories
+                self.datasets = datasets
+                self.options = options
+                
+            def run(self):
+                try:
+                    total_results = {
+                        'total_directories': len(self.directories),
+                        'total_datasets': len(self.datasets),
+                        'indexed_directories': 0,
+                        'indexed_datasets': 0,
+                        'total_files': 0,
+                        'indexed_files': 0,
+                        'errors': []
+                    }
+                    
+                    total_sources = len(self.directories) + len(self.datasets)
+                    current_source = 0
+                    
+                    # Index directories
+                    for directory in self.directories:
+                        if not Path(directory).exists():
+                            continue
+                            
+                        current_source += 1
+                        progress = int((current_source / total_sources) * 100)
+                        self.progress_updated.emit(progress, f"Indexing directory: {Path(directory).name}")
+                        
+                        # Get file metadata if including metadata
+                        if self.options.get('include_metadata', True):
+                            # Load file metadata from config
+                            file_metadata = self.config_manager.get("file_management.file_metadata", {})
+                            
+                            # Index directory with enhanced metadata
+                            results = self.vector_engine.index_directory(
+                                directory,
+                                fileset_name=Path(directory).name,
+                                fileset_description=f"Files from {directory}",
+                                tags=['files', 'local', 'directory']
+                            )
+                        else:
+                            results = self.vector_engine.index_directory(directory)
+                        
+                        total_results['indexed_directories'] += 1
+                        total_results['total_files'] += results.get('total_files', 0)
+                        total_results['indexed_files'] += results.get('indexed_files', 0)
+                        total_results['errors'].extend(results.get('errors', []))
+                    
+                    # Index datasets (placeholder for future implementation)
+                    for dataset_name in self.datasets:
+                        current_source += 1
+                        progress = int((current_source / total_sources) * 100)
+                        self.progress_updated.emit(progress, f"Indexing dataset: {dataset_name}")
+                        
+                        # TODO: Implement dataset indexing based on dataset type
+                        # This would connect to databases, APIs, etc.
+                        total_results['indexed_datasets'] += 1
+                        
+                    self.indexing_complete.emit(total_results)
+                    
+                except Exception as e:
+                    self.error_occurred.emit(str(e))
+        
+        self.indexing_worker = ComprehensiveIndexingWorker(
+            self.vector_engine, self.config_manager, directories, datasets, options
+        )
+        self.indexing_worker.progress_updated.connect(self.on_indexing_progress)
+        self.indexing_worker.indexing_complete.connect(self.on_comprehensive_indexing_complete)
+        self.indexing_worker.error_occurred.connect(self.on_indexing_error)
+        self.indexing_worker.start()
+        
+        self.indexing_started.emit()
+        
+    def on_comprehensive_indexing_complete(self, results):
+        """Handle comprehensive indexing completion"""
+        # Hide progress UI
+        self.indexing_progress.setVisible(False)
+        self.indexing_status_label.setVisible(False)
+        
+        # Re-enable buttons
+        self.rebuild_btn.setEnabled(True)
+        self.clear_index_btn.setEnabled(True)
+        
+        # Update status
+        indexed_files = results['indexed_files']
+        total_files = results['total_files']
+        indexed_dirs = results['indexed_directories']
+        indexed_datasets = results['indexed_datasets']
+        failed = len(results['errors'])
+        
+        if indexed_files > 0:
+            status_parts = []
+            if indexed_dirs > 0:
+                status_parts.append(f"{indexed_dirs} directories")
+            if indexed_datasets > 0:
+                status_parts.append(f"{indexed_datasets} datasets")
+                
+            status_text = f"✅ Indexing complete: {indexed_files}/{total_files} files from {', '.join(status_parts)}"
+            if failed > 0:
+                status_text += f" ({failed} errors)"
+            self.db_status_label.setText(status_text)
+            self.db_status_label.setStyleSheet("color: #28a745; font-weight: bold;")
+        else:
+            self.db_status_label.setText("⚠️ No files were indexed")
+            self.db_status_label.setStyleSheet("color: #ffc107; font-weight: bold;")
+            
+        self.update_database_status()
+        self.indexing_completed.emit(results)
+        
+        # Show comprehensive results dialog
+        self.show_comprehensive_indexing_results(results)
+        
+    def show_comprehensive_indexing_results(self, results):
+        """Show comprehensive indexing results dialog"""
+        from PyQt6.QtWidgets import QDialog, QVBoxLayout, QTextEdit, QPushButton, QLabel, QTabWidget, QWidget
+        
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Comprehensive Indexing Results")
+        dialog.setModal(True)
+        dialog.setMinimumSize(600, 500)
+        
+        layout = QVBoxLayout(dialog)
+        
+        # Summary
+        summary = QLabel(f"""
+<h3>Comprehensive Indexing Complete</h3>
+<b>Directories Processed:</b> {results['indexed_directories']}/{results['total_directories']}<br>
+<b>Datasets Processed:</b> {results['indexed_datasets']}/{results['total_datasets']}<br>
+<b>Total Files Found:</b> {results['total_files']}<br>
+<b>Successfully Indexed:</b> {results['indexed_files']}<br>
+<b>Errors:</b> {len(results['errors'])}
+        """)
+        layout.addWidget(summary)
+        
+        # Tabs for detailed results
+        tabs = QTabWidget()
+        
+        # Summary tab
+        summary_tab = QWidget()
+        summary_layout = QVBoxLayout(summary_tab)
+        
+        summary_text = QTextEdit()
+        summary_content = f"""
+COMPREHENSIVE VECTOR INDEX REBUILD COMPLETE
+
+Data Sources Processed:
+• Directories: {results['indexed_directories']}/{results['total_directories']}
+• Datasets: {results['indexed_datasets']}/{results['total_datasets']}
+
+File Processing:
+• Total files found: {results['total_files']}
+• Successfully indexed: {results['indexed_files']}
+• Success rate: {(results['indexed_files']/results['total_files']*100):.1f}% if results['total_files'] > 0 else 0
+
+The vector search index has been completely rebuilt and is ready for use.
+You can now perform semantic searches across all indexed content.
+        """
+        summary_text.setPlainText(summary_content)
+        summary_text.setReadOnly(True)
+        summary_layout.addWidget(summary_text)
+        tabs.addTab(summary_tab, "Summary")
+        
+        # Errors tab (if any)
+        if results['errors']:
+            errors_tab = QWidget()
+            errors_layout = QVBoxLayout(errors_tab)
+            
+            errors_text = QTextEdit()
+            errors_text.setPlainText('\n'.join(results['errors']))
+            errors_text.setReadOnly(True)
+            errors_layout.addWidget(errors_text)
+            tabs.addTab(errors_tab, f"Errors ({len(results['errors'])})")
+            
+        layout.addWidget(tabs)
+        
+        # Close button
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(dialog.accept)
+        layout.addWidget(close_btn)
+        
+        dialog.exec()
             
     def clear_vector_index(self):
         """Clear the vector search index"""

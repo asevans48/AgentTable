@@ -9,12 +9,13 @@ from typing import List, Dict, Any, Optional
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTreeView, QLabel, 
     QPushButton, QLineEdit, QComboBox, QMenu, QMessageBox,
-    QFileDialog, QFrame, QProgressBar, QDialog, QFormLayout, QTextEdit
+    QFileDialog, QFrame, QProgressBar, QDialog, QFormLayout, QTextEdit,
+    QListWidget, QListWidgetItem, QSplitter, QGroupBox, QCheckBox, QTabWidget
 )
 from PyQt6.QtCore import (
-    Qt, pyqtSignal, QModelIndex, QThread,
+    Qt, pyqtSignal, QModelIndex, QThread, QFileSystemWatcher
 )
-from PyQt6.QtGui import QFont, QAction, QStandardItemModel, QStandardItem
+from PyQt6.QtGui import QFont, QAction, QStandardItemModel, QStandardItem, QIcon, QPixmap, QPainter
 from typing import Dict, Any
 
 import logging
@@ -124,33 +125,78 @@ class FileIndexWorker(QThread):
         """Stop the indexing process"""
         self.should_stop = True
 
+class FileMetadataManager:
+    """Manages individual file metadata storage and retrieval"""
+    
+    def __init__(self, config_manager):
+        self.config_manager = config_manager
+        self.metadata_cache = {}
+        self.load_metadata()
+        
+    def load_metadata(self):
+        """Load file metadata from config"""
+        self.metadata_cache = self.config_manager.get("file_management.file_metadata", {})
+        
+    def save_metadata(self):
+        """Save file metadata to config"""
+        self.config_manager.set("file_management.file_metadata", self.metadata_cache)
+        
+    def get_file_metadata(self, file_path: str) -> Dict[str, Any]:
+        """Get metadata for a specific file"""
+        return self.metadata_cache.get(file_path, {
+            'tags': [],
+            'description': '',
+            'category': '',
+            'priority': 'Normal',
+            'custom_fields': {},
+            'indexed_for_vector_search': False,
+            'last_metadata_update': ''
+        })
+        
+    def set_file_metadata(self, file_path: str, metadata: Dict[str, Any]):
+        """Set metadata for a specific file"""
+        from datetime import datetime
+        metadata['last_metadata_update'] = datetime.now().isoformat()
+        self.metadata_cache[file_path] = metadata
+        self.save_metadata()
+        
+    def remove_file_metadata(self, file_path: str):
+        """Remove metadata for a file"""
+        if file_path in self.metadata_cache:
+            del self.metadata_cache[file_path]
+            self.save_metadata()
+
 class FileBrowser(QWidget):
-    """File browser widget for showing and managing files"""
+    """File browser widget for showing and managing files with folder-like interface"""
     
     file_selected = pyqtSignal(str)  # file_path
     file_double_clicked = pyqtSignal(str)  # file_path
     directory_added = pyqtSignal(str)  # directory_path
+    file_metadata_changed = pyqtSignal(str, dict)  # file_path, metadata
     
     def __init__(self, config_manager, parent=None):
         super().__init__(parent)
         self.config_manager = config_manager
+        self.metadata_manager = FileMetadataManager(config_manager)
         self.indexed_files = []
         self.current_filter = ""
         self.indexer_worker = None
+        self.file_watcher = QFileSystemWatcher()
+        self.current_directory = None
         
         self.setup_ui()
         self.setup_connections()
         self.load_watched_directories()
         
     def setup_ui(self):
-        """Setup the file browser UI"""
+        """Setup the file browser UI with folder-like interface"""
         layout = QVBoxLayout(self)
         layout.setContentsMargins(5, 5, 5, 5)
         
         # Header with controls
         header_layout = QVBoxLayout()
         
-        # Title and add directory button
+        # Title and controls
         title_layout = QHBoxLayout()
         
         title_label = QLabel("Files")
@@ -159,7 +205,14 @@ class FileBrowser(QWidget):
         
         title_layout.addStretch()
         
-        add_dir_button = QPushButton("+ Add")
+        # View mode toggle
+        self.view_mode = QComboBox()
+        self.view_mode.addItems(["List View", "Folder View"])
+        self.view_mode.setCurrentText("Folder View")
+        self.view_mode.currentTextChanged.connect(self.change_view_mode)
+        title_layout.addWidget(self.view_mode)
+        
+        add_dir_button = QPushButton("+ Add Directory")
         add_dir_button.setToolTip("Add directory to watch")
         add_dir_button.setStyleSheet("""
             QPushButton {
@@ -179,11 +232,25 @@ class FileBrowser(QWidget):
         
         header_layout.addLayout(title_layout)
         
+        # Navigation breadcrumb
+        self.breadcrumb_layout = QHBoxLayout()
+        self.breadcrumb_frame = QFrame()
+        self.breadcrumb_frame.setLayout(self.breadcrumb_layout)
+        self.breadcrumb_frame.setStyleSheet("""
+            QFrame {
+                background-color: #f8f9fa;
+                border: 1px solid #dee2e6;
+                border-radius: 4px;
+                padding: 4px;
+            }
+        """)
+        header_layout.addWidget(self.breadcrumb_frame)
+        
         # Search and filter
         filter_layout = QHBoxLayout()
         
         self.filter_input = QLineEdit()
-        self.filter_input.setPlaceholderText("Filter files...")
+        self.filter_input.setPlaceholderText("Search files...")
         self.filter_input.setStyleSheet("""
             QLineEdit {
                 padding: 4px;
@@ -195,9 +262,14 @@ class FileBrowser(QWidget):
         filter_layout.addWidget(self.filter_input)
         
         self.type_filter = QComboBox()
-        self.type_filter.addItems(["All", ".pdf", ".docx", ".xlsx", ".csv", ".json", ".txt"])
+        self.type_filter.addItems(["All Types", ".pdf", ".docx", ".xlsx", ".csv", ".json", ".txt", ".py", ".md"])
         self.type_filter.setStyleSheet("font-size: 9pt;")
         filter_layout.addWidget(self.type_filter)
+        
+        self.metadata_filter = QComboBox()
+        self.metadata_filter.addItems(["All Files", "With Metadata", "Without Metadata", "Vector Indexed"])
+        self.metadata_filter.setStyleSheet("font-size: 9pt;")
+        filter_layout.addWidget(self.metadata_filter)
         
         header_layout.addLayout(filter_layout)
         
@@ -229,9 +301,58 @@ class FileBrowser(QWidget):
         
         layout.addWidget(self.progress_frame)
         
-        # File list
+        # Main content area with splitter
+        main_splitter = QSplitter(Qt.Orientation.Horizontal)
+        
+        # Left side: Directory tree and file list
+        left_widget = QWidget()
+        left_layout = QVBoxLayout(left_widget)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        
+        # Directory tree
+        self.directory_tree = QTreeView()
+        self.directory_model = QStandardItemModel()
+        self.directory_model.setHorizontalHeaderLabels(['Watched Directories'])
+        self.directory_tree.setModel(self.directory_model)
+        self.directory_tree.setMaximumHeight(150)
+        self.directory_tree.setStyleSheet("""
+            QTreeView {
+                border: 1px solid #ddd;
+                border-radius: 4px;
+                background-color: #f8f9fa;
+            }
+        """)
+        left_layout.addWidget(self.directory_tree)
+        
+        # File list/grid
+        self.file_container = QWidget()
+        self.setup_file_views()
+        left_layout.addWidget(self.file_container)
+        
+        main_splitter.addWidget(left_widget)
+        
+        # Right side: File details and metadata
+        self.details_panel = self.create_details_panel()
+        main_splitter.addWidget(self.details_panel)
+        
+        # Set splitter proportions
+        main_splitter.setSizes([400, 300])
+        
+        layout.addWidget(main_splitter)
+        
+        # Status label
+        self.status_label = QLabel("No directories being watched")
+        self.status_label.setStyleSheet("font-size: 8pt; color: #666; padding: 4px;")
+        layout.addWidget(self.status_label)
+        
+    def setup_file_views(self):
+        """Setup both list and folder view for files"""
+        container_layout = QVBoxLayout(self.file_container)
+        container_layout.setContentsMargins(0, 0, 0, 0)
+        
+        # List view (tree view)
         self.file_model = QStandardItemModel()
-        self.file_model.setHorizontalHeaderLabels(['Name', 'Type', 'Size'])
+        self.file_model.setHorizontalHeaderLabels(['Name', 'Type', 'Size', 'Tags'])
         
         self.file_tree = QTreeView()
         self.file_tree.setModel(self.file_model)
@@ -247,7 +368,7 @@ class FileBrowser(QWidget):
                 selection-background-color: #e3f2fd;
             }
             QTreeView::item {
-                padding: 4px;
+                padding: 6px;
                 border-bottom: 1px solid #f0f0f0;
             }
             QTreeView::item:hover {
@@ -263,13 +384,250 @@ class FileBrowser(QWidget):
         self.file_tree.setColumnWidth(0, 200)  # Name
         self.file_tree.setColumnWidth(1, 60)   # Type
         self.file_tree.setColumnWidth(2, 80)   # Size
+        self.file_tree.setColumnWidth(3, 120)  # Tags
         
-        layout.addWidget(self.file_tree)
+        # Folder view (list widget with icons)
+        self.file_list = QListWidget()
+        self.file_list.setViewMode(QListWidget.ViewMode.IconMode)
+        self.file_list.setIconSize(QIcon().actualSize(QIcon().availableSizes()[0] if QIcon().availableSizes() else (48, 48)))
+        self.file_list.setGridSize(QIcon().actualSize((80, 100)))
+        self.file_list.setResizeMode(QListWidget.ResizeMode.Adjust)
+        self.file_list.setStyleSheet("""
+            QListWidget {
+                border: 1px solid #ddd;
+                border-radius: 4px;
+                background-color: white;
+                selection-background-color: #e3f2fd;
+            }
+            QListWidget::item {
+                padding: 8px;
+                border-radius: 4px;
+                margin: 2px;
+            }
+            QListWidget::item:hover {
+                background-color: #f5f5f5;
+            }
+            QListWidget::item:selected {
+                background-color: #e3f2fd;
+                color: black;
+            }
+        """)
         
-        # Status label
-        self.status_label = QLabel("No directories being watched")
-        self.status_label.setStyleSheet("font-size: 8pt; color: #666; padding: 4px;")
-        layout.addWidget(self.status_label)
+        container_layout.addWidget(self.file_tree)
+        container_layout.addWidget(self.file_list)
+        
+        # Initially show folder view
+        self.file_tree.setVisible(False)
+        self.file_list.setVisible(True)
+        
+    def create_details_panel(self):
+        """Create the file details and metadata panel"""
+        details_widget = QWidget()
+        details_widget.setMaximumWidth(350)
+        details_widget.setMinimumWidth(250)
+        
+        layout = QVBoxLayout(details_widget)
+        
+        # Panel title
+        title_label = QLabel("File Details")
+        title_label.setFont(QFont("Arial", 11, QFont.Weight.Bold))
+        title_label.setStyleSheet("padding: 8px; background-color: #f8f9fa; border-radius: 4px;")
+        layout.addWidget(title_label)
+        
+        # Tabs for different detail views
+        self.details_tabs = QTabWidget()
+        
+        # Properties tab
+        self.properties_tab = self.create_properties_tab()
+        self.details_tabs.addTab(self.properties_tab, "Properties")
+        
+        # Metadata tab
+        self.metadata_tab = self.create_metadata_tab()
+        self.details_tabs.addTab(self.metadata_tab, "Metadata")
+        
+        # Preview tab
+        self.preview_tab = self.create_preview_tab()
+        self.details_tabs.addTab(self.preview_tab, "Preview")
+        
+        layout.addWidget(self.details_tabs)
+        
+        # No file selected message
+        self.no_selection_label = QLabel("Select a file to view details")
+        self.no_selection_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.no_selection_label.setStyleSheet("color: #666; font-style: italic; padding: 20px;")
+        layout.addWidget(self.no_selection_label)
+        
+        # Initially hide tabs
+        self.details_tabs.setVisible(False)
+        
+        return details_widget
+        
+    def create_properties_tab(self):
+        """Create the file properties tab"""
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        
+        # File info labels
+        self.file_name_label = QLabel()
+        self.file_name_label.setWordWrap(True)
+        self.file_name_label.setStyleSheet("font-weight: bold; padding: 4px;")
+        layout.addWidget(self.file_name_label)
+        
+        self.file_path_label = QLabel()
+        self.file_path_label.setWordWrap(True)
+        self.file_path_label.setStyleSheet("color: #666; font-size: 8pt; padding: 4px;")
+        layout.addWidget(self.file_path_label)
+        
+        # Properties group
+        props_group = QGroupBox("Properties")
+        props_layout = QFormLayout(props_group)
+        
+        self.file_size_label = QLabel()
+        props_layout.addRow("Size:", self.file_size_label)
+        
+        self.file_type_label = QLabel()
+        props_layout.addRow("Type:", self.file_type_label)
+        
+        self.file_modified_label = QLabel()
+        props_layout.addRow("Modified:", self.file_modified_label)
+        
+        self.file_accessible_label = QLabel()
+        props_layout.addRow("Accessible:", self.file_accessible_label)
+        
+        layout.addWidget(props_group)
+        
+        layout.addStretch()
+        return widget
+        
+    def create_metadata_tab(self):
+        """Create the file metadata tab"""
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        
+        # Metadata form
+        form_layout = QFormLayout()
+        
+        # Tags
+        self.metadata_tags = QLineEdit()
+        self.metadata_tags.setPlaceholderText("tag1, tag2, tag3")
+        form_layout.addRow("Tags:", self.metadata_tags)
+        
+        # Description
+        self.metadata_description = QTextEdit()
+        self.metadata_description.setMaximumHeight(80)
+        self.metadata_description.setPlaceholderText("File description...")
+        form_layout.addRow("Description:", self.metadata_description)
+        
+        # Category
+        self.metadata_category = QComboBox()
+        self.metadata_category.addItems(["", "Document", "Data", "Code", "Image", "Archive", "Other"])
+        self.metadata_category.setEditable(True)
+        form_layout.addRow("Category:", self.metadata_category)
+        
+        # Priority
+        self.metadata_priority = QComboBox()
+        self.metadata_priority.addItems(["Low", "Normal", "High", "Critical"])
+        self.metadata_priority.setCurrentText("Normal")
+        form_layout.addRow("Priority:", self.metadata_priority)
+        
+        # Vector search indexing
+        self.metadata_vector_indexed = QCheckBox("Include in vector search")
+        self.metadata_vector_indexed.setChecked(True)
+        form_layout.addRow(self.metadata_vector_indexed)
+        
+        layout.addLayout(form_layout)
+        
+        # Save button
+        save_metadata_btn = QPushButton("Save Metadata")
+        save_metadata_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #007bff;
+                color: white;
+                border: none;
+                padding: 6px 12px;
+                border-radius: 4px;
+                font-weight: bold;
+            }
+            QPushButton:hover { background-color: #0056b3; }
+        """)
+        save_metadata_btn.clicked.connect(self.save_file_metadata)
+        layout.addWidget(save_metadata_btn)
+        
+        layout.addStretch()
+        return widget
+        
+    def create_preview_tab(self):
+        """Create the file preview tab"""
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        
+        self.preview_content = QTextEdit()
+        self.preview_content.setReadOnly(True)
+        self.preview_content.setPlaceholderText("File preview will appear here...")
+        self.preview_content.setStyleSheet("""
+            QTextEdit {
+                border: 1px solid #ddd;
+                border-radius: 4px;
+                background-color: #f8f9fa;
+                font-family: 'Consolas', 'Monaco', monospace;
+                font-size: 9pt;
+            }
+        """)
+        layout.addWidget(self.preview_content)
+        
+        return widget
+        
+    def change_view_mode(self, mode):
+        """Change between list and folder view"""
+        if mode == "List View":
+            self.file_tree.setVisible(True)
+            self.file_list.setVisible(False)
+        else:  # Folder View
+            self.file_tree.setVisible(False)
+            self.file_list.setVisible(True)
+            
+    def update_breadcrumb(self, path=None):
+        """Update the breadcrumb navigation"""
+        # Clear existing breadcrumb
+        while self.breadcrumb_layout.count():
+            child = self.breadcrumb_layout.takeAt(0)
+            if child.widget():
+                child.widget().deleteLater()
+                
+        if path:
+            from pathlib import Path
+            path_obj = Path(path)
+            
+            # Add home button
+            home_btn = QPushButton("📁 Watched Directories")
+            home_btn.setFlat(True)
+            home_btn.clicked.connect(lambda: self.navigate_to_directory(None))
+            self.breadcrumb_layout.addWidget(home_btn)
+            
+            # Add separator
+            sep_label = QLabel(" > ")
+            sep_label.setStyleSheet("color: #666;")
+            self.breadcrumb_layout.addWidget(sep_label)
+            
+            # Add current directory
+            dir_btn = QPushButton(f"📂 {path_obj.name}")
+            dir_btn.setFlat(True)
+            dir_btn.setStyleSheet("font-weight: bold;")
+            self.breadcrumb_layout.addWidget(dir_btn)
+            
+        else:
+            # Show watched directories
+            home_label = QLabel("📁 All Watched Directories")
+            home_label.setStyleSheet("font-weight: bold; color: #333;")
+            self.breadcrumb_layout.addWidget(home_label)
+            
+        self.breadcrumb_layout.addStretch()
+        
+    def navigate_to_directory(self, directory_path):
+        """Navigate to a specific directory"""
+        self.current_directory = directory_path
+        self.update_breadcrumb(directory_path)
+        self.apply_filters()
         
     def setup_connections(self):
         """Setup signal-slot connections"""
@@ -283,14 +641,32 @@ class FileBrowser(QWidget):
         self.file_tree.customContextMenuRequested.connect(self.show_context_menu)
         
     def load_watched_directories(self):
-        """Load watched directories from config"""
+        """Load watched directories from config and populate directory tree"""
         watched_dirs = self.config_manager.get("file_management.watched_directories", [])
+        
+        # Clear directory model
+        self.directory_model.clear()
+        self.directory_model.setHorizontalHeaderLabels(['Watched Directories'])
+        
+        # Add watched directories to tree
+        for directory in watched_dirs:
+            if Path(directory).exists():
+                dir_item = QStandardItem(f"📂 {Path(directory).name}")
+                dir_item.setData(directory, Qt.ItemDataRole.UserRole)
+                dir_item.setToolTip(directory)
+                self.directory_model.appendRow(dir_item)
+                
+                # Add to file watcher
+                self.file_watcher.addPath(directory)
         
         if watched_dirs:
             self.start_indexing()
             self.status_label.setText(f"Watching {len(watched_dirs)} directories")
         else:
             self.status_label.setText("No directories being watched")
+            
+        # Update breadcrumb
+        self.update_breadcrumb()
             
     def add_directory(self):
         """Add directory to watch list with metadata collection"""
@@ -483,81 +859,344 @@ class FileBrowser(QWidget):
         self.file_tree.sortByColumn(0, Qt.SortOrder.AscendingOrder)
         
     def add_file_to_model(self, file_info: Dict[str, Any]):
-        """Add file to the tree model"""
+        """Add file to both tree and list models"""
+        # Get file metadata
+        metadata = self.metadata_manager.get_file_metadata(file_info['path'])
+        
+        # Create file icon based on type
+        file_icon = self.get_file_icon(file_info['type'])
+        
+        # Add to tree view
         name_item = QStandardItem(file_info['name'])
         name_item.setData(file_info['path'], Qt.ItemDataRole.UserRole)
-        name_item.setToolTip(f"{file_info['path']}\n{file_info['description']}")
+        name_item.setIcon(file_icon)
         
-        # Set icon based on file type
+        # Enhanced tooltip with metadata
+        tooltip_parts = [
+            f"Path: {file_info['path']}",
+            f"Type: {file_info['description']}",
+            f"Size: {self.format_file_size(file_info['size'])}"
+        ]
+        if metadata.get('description'):
+            tooltip_parts.append(f"Description: {metadata['description']}")
+        if metadata.get('tags'):
+            tooltip_parts.append(f"Tags: {', '.join(metadata['tags'])}")
+        name_item.setToolTip('\n'.join(tooltip_parts))
+        
+        # Type item
         type_item = QStandardItem(file_info['type'])
         
-        # Format file size
-        size = file_info['size']
-        if size < 1024:
-            size_str = f"{size} B"
-        elif size < 1024 * 1024:
-            size_str = f"{size // 1024} KB"
-        else:
-            size_str = f"{size // (1024 * 1024)} MB"
-            
-        size_item = QStandardItem(size_str)
-        size_item.setData(size, Qt.ItemDataRole.UserRole)  # Store actual size for sorting
+        # Size item
+        size_item = QStandardItem(self.format_file_size(file_info['size']))
+        size_item.setData(file_info['size'], Qt.ItemDataRole.UserRole)  # Store actual size for sorting
+        
+        # Tags item
+        tags_text = ', '.join(metadata.get('tags', []))
+        tags_item = QStandardItem(tags_text)
         
         # Add accessibility indicator
         if not file_info['is_accessible']:
             name_item.setForeground(Qt.GlobalColor.red)
             name_item.setToolTip(f"{file_info['path']}\nAccess denied")
             
-        self.file_model.appendRow([name_item, type_item, size_item])
+        self.file_model.appendRow([name_item, type_item, size_item, tags_item])
+        
+        # Add to list view
+        list_item = QListWidgetItem()
+        list_item.setText(file_info['name'])
+        list_item.setIcon(file_icon)
+        list_item.setData(Qt.ItemDataRole.UserRole, file_info['path'])
+        list_item.setToolTip('\n'.join(tooltip_parts))
+        
+        # Add metadata indicators
+        if metadata.get('tags'):
+            list_item.setText(f"{file_info['name']}\n🏷️ {', '.join(metadata['tags'][:2])}")
+        
+        self.file_list.addItem(list_item)
+        
+    def get_file_icon(self, file_type: str):
+        """Get icon for file type"""
+        # Create simple colored icons for different file types
+        icon_colors = {
+            '.pdf': '#dc3545',    # Red
+            '.docx': '#007bff',   # Blue
+            '.xlsx': '#28a745',   # Green
+            '.csv': '#28a745',    # Green
+            '.json': '#ffc107',   # Yellow
+            '.txt': '#6c757d',    # Gray
+            '.py': '#17a2b8',     # Cyan
+            '.md': '#6f42c1',     # Purple
+            '.sql': '#fd7e14',    # Orange
+        }
+        
+        color = icon_colors.get(file_type.lower(), '#6c757d')
+        
+        # Create a simple colored square icon
+        pixmap = QPixmap(16, 16)
+        pixmap.fill(QColor(color))
+        
+        painter = QPainter(pixmap)
+        painter.setPen(QColor('#ffffff'))
+        painter.setFont(QFont('Arial', 8, QFont.Weight.Bold))
+        
+        # Draw file extension
+        ext_text = file_type[1:].upper() if file_type.startswith('.') else 'FILE'
+        if len(ext_text) > 3:
+            ext_text = ext_text[:3]
+        painter.drawText(pixmap.rect(), Qt.AlignmentFlag.AlignCenter, ext_text)
+        painter.end()
+        
+        return QIcon(pixmap)
+        
+    def format_file_size(self, size: int) -> str:
+        """Format file size in human readable format"""
+        if size < 1024:
+            return f"{size} B"
+        elif size < 1024 * 1024:
+            return f"{size // 1024} KB"
+        elif size < 1024 * 1024 * 1024:
+            return f"{size // (1024 * 1024)} MB"
+        else:
+            return f"{size // (1024 * 1024 * 1024)} GB"
         
     def passes_filter(self, file_info: Dict[str, Any]) -> bool:
         """Check if file passes current filters"""
+        # Directory filter
+        if self.current_directory:
+            if not file_info['path'].startswith(self.current_directory):
+                return False
+        
         # Text filter
         if self.current_filter:
-            if self.current_filter.lower() not in file_info['name'].lower():
+            search_text = f"{file_info['name']} {file_info['description']}".lower()
+            metadata = self.metadata_manager.get_file_metadata(file_info['path'])
+            if metadata.get('tags'):
+                search_text += f" {' '.join(metadata['tags'])}"
+            if metadata.get('description'):
+                search_text += f" {metadata['description']}"
+                
+            if self.current_filter.lower() not in search_text:
                 return False
                 
         # Type filter
         type_filter = self.type_filter.currentText()
-        if type_filter != "All" and file_info['type'] != type_filter:
+        if type_filter != "All Types" and file_info['type'] != type_filter:
             return False
+            
+        # Metadata filter
+        metadata_filter = self.metadata_filter.currentText()
+        if metadata_filter != "All Files":
+            metadata = self.metadata_manager.get_file_metadata(file_info['path'])
+            
+            if metadata_filter == "With Metadata":
+                if not (metadata.get('tags') or metadata.get('description') or metadata.get('category')):
+                    return False
+            elif metadata_filter == "Without Metadata":
+                if metadata.get('tags') or metadata.get('description') or metadata.get('category'):
+                    return False
+            elif metadata_filter == "Vector Indexed":
+                if not metadata.get('indexed_for_vector_search', False):
+                    return False
             
         return True
         
-    def apply_filter(self):
+    def apply_filters(self):
         """Apply current filters to file list"""
         self.current_filter = self.filter_input.text()
         
-        # Clear and repopulate model
+        # Clear and repopulate models
         self.file_model.clear()
-        self.file_model.setHorizontalHeaderLabels(['Name', 'Type', 'Size'])
+        self.file_model.setHorizontalHeaderLabels(['Name', 'Type', 'Size', 'Tags'])
+        self.file_list.clear()
         
+        filtered_files = []
         for file_info in self.indexed_files:
             if self.passes_filter(file_info):
                 self.add_file_to_model(file_info)
+                filtered_files.append(file_info)
                 
         # Update status
-        visible_count = self.file_model.rowCount()
+        visible_count = len(filtered_files)
         total_count = len(self.indexed_files)
         
-        if visible_count != total_count:
-            self.status_label.setText(f"Showing {visible_count} of {total_count} files")
+        if self.current_directory:
+            dir_name = Path(self.current_directory).name
+            if visible_count != total_count:
+                self.status_label.setText(f"Showing {visible_count} of {total_count} files in {dir_name}")
+            else:
+                self.status_label.setText(f"Found {total_count} files in {dir_name}")
         else:
-            self.status_label.setText(f"Found {total_count} files in watched directories")
+            if visible_count != total_count:
+                self.status_label.setText(f"Showing {visible_count} of {total_count} files")
+            else:
+                self.status_label.setText(f"Found {total_count} files in watched directories")
             
     def on_file_clicked(self, index: QModelIndex):
-        """Handle file selection"""
+        """Handle file selection in tree view"""
         if index.isValid():
             name_item = self.file_model.item(index.row(), 0)
             file_path = name_item.data(Qt.ItemDataRole.UserRole)
+            self.show_file_details(file_path)
             self.file_selected.emit(file_path)
             
     def on_file_double_clicked(self, index: QModelIndex):
-        """Handle file double-click"""
+        """Handle file double-click in tree view"""
         if index.isValid():
             name_item = self.file_model.item(index.row(), 0)
             file_path = name_item.data(Qt.ItemDataRole.UserRole)
             self.file_double_clicked.emit(file_path)
+            
+    def on_file_list_clicked(self, item: QListWidgetItem):
+        """Handle file selection in list view"""
+        file_path = item.data(Qt.ItemDataRole.UserRole)
+        self.show_file_details(file_path)
+        self.file_selected.emit(file_path)
+        
+    def on_file_list_double_clicked(self, item: QListWidgetItem):
+        """Handle file double-click in list view"""
+        file_path = item.data(Qt.ItemDataRole.UserRole)
+        self.file_double_clicked.emit(file_path)
+        
+    def on_directory_clicked(self, index: QModelIndex):
+        """Handle directory selection"""
+        if index.isValid():
+            item = self.directory_model.itemFromIndex(index)
+            directory_path = item.data(Qt.ItemDataRole.UserRole)
+            if directory_path:
+                self.navigate_to_directory(directory_path)
+                
+    def on_directory_changed(self, path: str):
+        """Handle directory changes from file watcher"""
+        logger.info(f"Directory changed: {path}")
+        # Trigger re-indexing of changed directory
+        self.start_indexing()
+        
+    def on_file_changed(self, path: str):
+        """Handle file changes from file watcher"""
+        logger.info(f"File changed: {path}")
+        # Update file info if it's in our list
+        for i, file_info in enumerate(self.indexed_files):
+            if file_info['path'] == path:
+                # Re-index this specific file
+                try:
+                    updated_info = self.indexer_worker.get_file_info(Path(path))
+                    self.indexed_files[i] = updated_info
+                    self.apply_filters()
+                except Exception as e:
+                    logger.warning(f"Failed to update file info for {path}: {e}")
+                break
+                
+    def show_file_details(self, file_path: str):
+        """Show file details in the details panel"""
+        if not file_path:
+            self.details_tabs.setVisible(False)
+            self.no_selection_label.setVisible(True)
+            return
+            
+        # Find file info
+        file_info = None
+        for info in self.indexed_files:
+            if info['path'] == file_path:
+                file_info = info
+                break
+                
+        if not file_info:
+            return
+            
+        # Show details tabs
+        self.details_tabs.setVisible(True)
+        self.no_selection_label.setVisible(False)
+        
+        # Update properties tab
+        self.file_name_label.setText(file_info['name'])
+        self.file_path_label.setText(file_info['path'])
+        self.file_size_label.setText(self.format_file_size(file_info['size']))
+        self.file_type_label.setText(file_info['description'])
+        
+        from datetime import datetime
+        modified_time = datetime.fromtimestamp(file_info['modified']).strftime('%Y-%m-%d %H:%M:%S')
+        self.file_modified_label.setText(modified_time)
+        
+        accessible_text = "Yes" if file_info['is_accessible'] else "No"
+        self.file_accessible_label.setText(accessible_text)
+        
+        # Update metadata tab
+        metadata = self.metadata_manager.get_file_metadata(file_path)
+        self.metadata_tags.setText(', '.join(metadata.get('tags', [])))
+        self.metadata_description.setPlainText(metadata.get('description', ''))
+        self.metadata_category.setCurrentText(metadata.get('category', ''))
+        self.metadata_priority.setCurrentText(metadata.get('priority', 'Normal'))
+        self.metadata_vector_indexed.setChecked(metadata.get('indexed_for_vector_search', False))
+        
+        # Update preview tab
+        self.load_file_preview(file_path)
+        
+    def load_file_preview(self, file_path: str):
+        """Load file preview content"""
+        try:
+            file_path_obj = Path(file_path)
+            
+            if file_path_obj.suffix.lower() in ['.txt', '.md', '.py', '.sql', '.json', '.csv']:
+                # Text-based files
+                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                    content = f.read()
+                    
+                # Limit preview size
+                if len(content) > 5000:
+                    content = content[:5000] + "\n\n... (truncated)"
+                    
+                self.preview_content.setPlainText(content)
+            else:
+                # Binary or unsupported files
+                self.preview_content.setPlainText(f"Preview not available for {file_path_obj.suffix} files")
+                
+        except Exception as e:
+            self.preview_content.setPlainText(f"Error loading preview: {str(e)}")
+            
+    def save_file_metadata(self):
+        """Save metadata for the currently selected file"""
+        # Get current selection
+        current_file = None
+        
+        if self.view_mode.currentText() == "List View":
+            selection = self.file_tree.selectionModel()
+            if selection.hasSelection():
+                index = selection.currentIndex()
+                if index.isValid():
+                    name_item = self.file_model.item(index.row(), 0)
+                    current_file = name_item.data(Qt.ItemDataRole.UserRole)
+        else:
+            current_item = self.file_list.currentItem()
+            if current_item:
+                current_file = current_item.data(Qt.ItemDataRole.UserRole)
+                
+        if not current_file:
+            QMessageBox.warning(self, "No Selection", "Please select a file to save metadata for.")
+            return
+            
+        # Collect metadata
+        tags_text = self.metadata_tags.text().strip()
+        tags = [tag.strip() for tag in tags_text.split(',') if tag.strip()] if tags_text else []
+        
+        metadata = {
+            'tags': tags,
+            'description': self.metadata_description.toPlainText().strip(),
+            'category': self.metadata_category.currentText(),
+            'priority': self.metadata_priority.currentText(),
+            'indexed_for_vector_search': self.metadata_vector_indexed.isChecked(),
+            'custom_fields': {}
+        }
+        
+        # Save metadata
+        self.metadata_manager.set_file_metadata(current_file, metadata)
+        
+        # Emit signal
+        self.file_metadata_changed.emit(current_file, metadata)
+        
+        # Refresh display
+        self.apply_filters()
+        
+        QMessageBox.information(self, "Metadata Saved", "File metadata has been saved successfully.")
             
     def show_context_menu(self, position):
         """Show context menu for file operations"""
