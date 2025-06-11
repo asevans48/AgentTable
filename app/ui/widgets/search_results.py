@@ -281,10 +281,6 @@ class SearchWorker(QThread):
                     from pathlib import Path
                     file_name = Path(result.get('file_path', 'Unknown')).name
                         
-                    # Apply filters before adding to results
-                    if not self.passes_filters(result):
-                        continue
-                    
                     # Get enhanced metadata from vector search result
                     fileset_name = result.get('fileset_name', 'Unknown Dataset')
                     schema_info = result.get('schema_info', '')
