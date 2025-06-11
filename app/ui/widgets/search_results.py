@@ -102,10 +102,75 @@ class SearchResultItem(QFrame):
             path_label.setWordWrap(True)
             layout.addWidget(path_label)
         
-        # Summary/Description
+        # Metadata description (if available and different from summary)
+        user_description = self.result_data.get('user_description', '')
+        if user_description and user_description.strip():
+            desc_label = QLabel(f"<b>Description:</b> {user_description}")
+            desc_label.setWordWrap(True)
+            desc_label.setStyleSheet("""
+                QLabel {
+                    color: #1a73e8;
+                    font-size: 10pt;
+                    margin: 2px 0;
+                    padding: 4px 8px;
+                    background-color: #f0f7ff;
+                    border-left: 3px solid #1a73e8;
+                    border-radius: 4px;
+                }
+            """)
+            layout.addWidget(desc_label)
+
+        # Tags display
+        tags = self.result_data.get('tags', [])
+        if tags and isinstance(tags, list) and any(tag.strip() for tag in tags):
+            tags_widget = QWidget()
+            tags_layout = QHBoxLayout(tags_widget)
+            tags_layout.setContentsMargins(0, 2, 0, 2)
+            
+            tags_title = QLabel("Tags:")
+            tags_title.setStyleSheet("color: #666; font-size: 9pt; font-weight: bold;")
+            tags_layout.addWidget(tags_title)
+            
+            # Display up to 5 tags as badges
+            for tag in tags[:5]:
+                if tag.strip():
+                    tag_badge = QLabel(tag.strip())
+                    tag_badge.setStyleSheet("""
+                        QLabel {
+                            background-color: #e8f5e8;
+                            color: #2e7d32;
+                            padding: 2px 6px;
+                            border-radius: 8px;
+                            font-size: 8pt;
+                            font-weight: bold;
+                            margin: 1px;
+                        }
+                    """)
+                    tags_layout.addWidget(tag_badge)
+            
+            # Show count if more tags exist
+            if len(tags) > 5:
+                more_label = QLabel(f"+{len(tags) - 5} more")
+                more_label.setStyleSheet("color: #666; font-size: 8pt; font-style: italic;")
+                tags_layout.addWidget(more_label)
+                
+            tags_layout.addStretch()
+            layout.addWidget(tags_widget)
+
+        # Summary/Content preview
         summary = self.result_data.get('summary', self.result_data.get('description', ''))
         if summary:
-            summary_label = QLabel(summary)
+            # Clean up the summary to remove redundant metadata that's now shown separately
+            clean_summary = summary
+            if user_description and user_description in clean_summary:
+                clean_summary = clean_summary.replace(f"📝 {user_description}", "").strip()
+            
+            # Remove leading newlines and clean up
+            clean_summary = clean_summary.strip()
+            if clean_summary.startswith('\n'):
+                clean_summary = clean_summary.lstrip('\n')
+            
+            summary_label = QLabel(clean_summary)
             summary_label.setWordWrap(True)
             summary_label.setStyleSheet("""
                 QLabel {
@@ -117,30 +182,52 @@ class SearchResultItem(QFrame):
             """)
             layout.addWidget(summary_label)
         
+        # Schema information (if available)
+        schema_info = self.result_data.get('schema_info', '')
+        if schema_info and schema_info.strip():
+            schema_label = QLabel(f"<b>Schema:</b> {schema_info}")
+            schema_label.setWordWrap(True)
+            schema_label.setStyleSheet("""
+                QLabel {
+                    color: #6a1b9a;
+                    font-size: 9pt;
+                    margin: 2px 0;
+                    padding: 3px 6px;
+                    background-color: #f3e5f5;
+                    border-radius: 3px;
+                }
+            """)
+            layout.addWidget(schema_label)
+
         # Footer with actions and metadata
         footer_layout = QHBoxLayout()
         
         # Dataset and metadata information
         fileset_name = self.result_data.get('fileset_name', self.result_data.get('owner', 'Unknown'))
-        owner_label = QLabel(f"Dataset: {fileset_name}")
+        owner_label = QLabel(f"📊 {fileset_name}")
         owner_label.setStyleSheet("color: #666; font-size: 9pt; font-weight: bold;")
         footer_layout.addWidget(owner_label)
         
-        # Show tags if available
-        tags = self.result_data.get('tags', [])
-        if tags and isinstance(tags, list) and tags:
-            tags_text = ', '.join(tags[:3])  # Show first 3 tags
-            if len(tags) > 3:
-                tags_text += f' +{len(tags)-3}'
-            tags_label = QLabel(f"Tags: {tags_text}")
-            tags_label.setStyleSheet("color: #666; font-size: 8pt; font-style: italic;")
-            footer_layout.addWidget(tags_label)
+        # File type information
+        file_type = self.result_data.get('file_type', '')
+        if file_type:
+            type_label = QLabel(f"📄 {file_type.upper()}")
+            type_label.setStyleSheet("color: #666; font-size: 8pt;")
+            footer_layout.addWidget(type_label)
+        
+        # Similarity score (for vector search results)
+        score = self.result_data.get('score', 0)
+        if score > 0:
+            score_label = QLabel(f"🎯 {score:.2f}")
+            score_label.setToolTip(f"Relevance score: {score:.3f}")
+            score_label.setStyleSheet("color: #666; font-size: 8pt;")
+            footer_layout.addWidget(score_label)
         
         # Last modified
         last_modified = self.result_data.get('last_modified', '')
         if last_modified:
-            modified_label = QLabel(f"Modified: {last_modified}")
-            modified_label.setStyleSheet("color: #666; font-size: 9pt;")
+            modified_label = QLabel(f"🕒 {last_modified}")
+            modified_label.setStyleSheet("color: #666; font-size: 8pt;")
             footer_layout.addWidget(modified_label)
         
         footer_layout.addStretch()
