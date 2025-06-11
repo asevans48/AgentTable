@@ -446,6 +446,10 @@ class MainWindow(QMainWindow):
         
         tools_menu.addSeparator()
         
+        cloud_auth_action = QAction("Cloud Authentication", self)
+        cloud_auth_action.triggered.connect(self.show_cloud_auth)
+        tools_menu.addAction(cloud_auth_action)
+        
         change_password_action = QAction("Change Password", self)
         change_password_action.triggered.connect(self.show_change_password)
         tools_menu.addAction(change_password_action)
