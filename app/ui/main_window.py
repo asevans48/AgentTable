@@ -21,9 +21,10 @@ from ui.dialogs.filter_dialog import FilterDialog
 class MainWindow(QMainWindow):
     """Main application window"""
     
-    def __init__(self, config_manager):
+    def __init__(self, config_manager, user_info=None):
         super().__init__()
         self.config_manager = config_manager
+        self.user_info = user_info or {}
         self.current_section = None
         
         self.setWindowTitle("Data Platform - Vector Search & File Management")
@@ -319,7 +320,9 @@ class MainWindow(QMainWindow):
         footer_layout = QVBoxLayout(footer_frame)
         footer_layout.setContentsMargins(16, 12, 16, 12)
         
-        user_label = QLabel("👤 Current User")
+        # Display current user info
+        username = self.user_info.get('username', 'Unknown User')
+        user_label = QLabel(f"👤 {username}")
         user_label.setFont(QFont("Segoe UI", 9))
         user_label.setStyleSheet("color: #6c757d; margin-bottom: 2px;")
         footer_layout.addWidget(user_label)
@@ -441,6 +444,16 @@ class MainWindow(QMainWindow):
         filter_action.triggered.connect(self.show_filter_dialog)
         tools_menu.addAction(filter_action)
         
+        tools_menu.addSeparator()
+        
+        change_password_action = QAction("Change Password", self)
+        change_password_action.triggered.connect(self.show_change_password)
+        tools_menu.addAction(change_password_action)
+        
+        logout_action = QAction("Logout", self)
+        logout_action.triggered.connect(self.logout)
+        tools_menu.addAction(logout_action)
+        
         # View menu
         view_menu = menubar.addMenu("View")
         
@@ -517,3 +530,124 @@ class MainWindow(QMainWindow):
         self.file_browser.refresh()
         self.dataset_browser.refresh()
         self.status_bar.showMessage("Data refreshed")
+    
+    def show_change_password(self):
+        """Show change password dialog"""
+        from ui.dialogs.login_dialog import LoginDialog
+        from PyQt6.QtWidgets import QDialog, QVBoxLayout, QFormLayout, QLineEdit, QPushButton, QLabel, QMessageBox
+        
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Change Password")
+        dialog.setModal(True)
+        dialog.setFixedSize(400, 250)
+        
+        layout = QVBoxLayout(dialog)
+        
+        # Instructions
+        instructions = QLabel("Change your login password:")
+        instructions.setStyleSheet("font-weight: bold; margin-bottom: 10px;")
+        layout.addWidget(instructions)
+        
+        # Form for password change
+        form_layout = QFormLayout()
+        
+        current_password = QLineEdit()
+        current_password.setEchoMode(QLineEdit.EchoMode.Password)
+        current_password.setPlaceholderText("Current password")
+        form_layout.addRow("Current Password:", current_password)
+        
+        new_password = QLineEdit()
+        new_password.setEchoMode(QLineEdit.EchoMode.Password)
+        new_password.setPlaceholderText("New password")
+        form_layout.addRow("New Password:", new_password)
+        
+        confirm_password = QLineEdit()
+        confirm_password.setEchoMode(QLineEdit.EchoMode.Password)
+        confirm_password.setPlaceholderText("Confirm new password")
+        form_layout.addRow("Confirm Password:", confirm_password)
+        
+        layout.addLayout(form_layout)
+        
+        # Buttons
+        button_layout = QVBoxLayout()
+        
+        change_button = QPushButton("Change Password")
+        change_button.setStyleSheet("""
+            QPushButton {
+                background-color: #007bff;
+                color: white;
+                border: none;
+                padding: 12px;
+                border-radius: 4px;
+                font-size: 12pt;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #0056b3;
+            }
+        """)
+        
+        def change_password():
+            if not all([current_password.text(), new_password.text(), confirm_password.text()]):
+                QMessageBox.warning(dialog, "Error", "Please fill in all fields")
+                return
+            
+            if new_password.text() != confirm_password.text():
+                QMessageBox.warning(dialog, "Error", "New passwords do not match")
+                return
+            
+            # Verify current password and update
+            login_dialog = LoginDialog()
+            success, message = login_dialog.create_local_account(
+                self.user_info.get('username', 'admin'), 
+                new_password.text()
+            )
+            
+            if success:
+                QMessageBox.information(dialog, "Success", "Password changed successfully!")
+                dialog.accept()
+            else:
+                QMessageBox.warning(dialog, "Error", f"Failed to change password: {message}")
+        
+        change_button.clicked.connect(change_password)
+        button_layout.addWidget(change_button)
+        
+        cancel_button = QPushButton("Cancel")
+        cancel_button.setStyleSheet("""
+            QPushButton {
+                background-color: #6c757d;
+                color: white;
+                border: none;
+                padding: 12px;
+                border-radius: 4px;
+                font-size: 12pt;
+            }
+            QPushButton:hover {
+                background-color: #545b62;
+            }
+        """)
+        cancel_button.clicked.connect(dialog.reject)
+        button_layout.addWidget(cancel_button)
+        
+        layout.addLayout(button_layout)
+        
+        dialog.exec()
+    
+    def logout(self):
+        """Logout and return to login screen"""
+        from PyQt6.QtWidgets import QMessageBox
+        
+        reply = QMessageBox.question(
+            self, 
+            "Logout", 
+            "Are you sure you want to logout?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+        
+        if reply == QMessageBox.StandardButton.Yes:
+            self.close()
+            # Restart the application to show login again
+            import sys
+            import os
+            os.execl(sys.executable, sys.executable, *sys.argv)

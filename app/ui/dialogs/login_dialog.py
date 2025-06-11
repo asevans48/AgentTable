@@ -58,6 +58,10 @@ class AuthenticationWorker(QThread):
         username = self.credentials.get('username', '')
         password = self.credentials.get('password', '')
         
+        # Check for default credentials first
+        if username == "admin" and password == "admin123":
+            return True, "Default credentials accepted - Please change your password"
+        
         # Check for stored credentials (simplified implementation)
         credentials_file = Path.home() / ".dataplatform" / "credentials.json"
         
@@ -79,11 +83,11 @@ class AuthenticationWorker(QThread):
                 logger.error(f"Error reading credentials: {e}")
                 return False, "Error reading stored credentials"
         else:
-            # First time setup - create new credentials
+            # First time setup - create new credentials or use defaults
             if username and password:
                 return self.create_local_account(username, password)
             else:
-                return False, "Please provide username and password"
+                return False, "Please provide username and password (default: admin/admin123)"
                 
     def create_local_account(self, username: str, password: str) -> tuple[bool, str]:
         """Create new local account"""
@@ -217,7 +221,8 @@ class LoginDialog(QDialog):
         
         # Username
         self.username_input = QLineEdit()
-        self.username_input.setPlaceholderText("Enter your username")
+        self.username_input.setPlaceholderText("Enter your username (default: admin)")
+        self.username_input.setText("admin")  # Set default username
         self.username_input.setStyleSheet("""
             QLineEdit {
                 padding: 10px;
@@ -235,7 +240,8 @@ class LoginDialog(QDialog):
         # Password
         self.password_input = QLineEdit()
         self.password_input.setEchoMode(QLineEdit.EchoMode.Password)
-        self.password_input.setPlaceholderText("Enter your password")
+        self.password_input.setPlaceholderText("Enter your password (default: admin123)")
+        self.password_input.setText("admin123")  # Set default password
         self.password_input.setStyleSheet(self.username_input.styleSheet())
         self.credentials_form.addRow("Password:", self.password_input)
         
@@ -462,11 +468,118 @@ class LoginDialog(QDialog):
         
     def show_create_account(self, event):
         """Show create account information"""
-        QMessageBox.information(
-            self, 
-            "Create Account", 
-            "To create a local account, simply enter a new username and password and click Login.\n\nFor Active Directory or OAuth, contact your system administrator."
-        )
+        from PyQt6.QtWidgets import QDialog, QVBoxLayout, QFormLayout, QLineEdit, QPushButton, QLabel
+        
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Change Login Credentials")
+        dialog.setModal(True)
+        dialog.setFixedSize(400, 300)
+        
+        layout = QVBoxLayout(dialog)
+        
+        # Instructions
+        instructions = QLabel("Create new login credentials:")
+        instructions.setStyleSheet("font-weight: bold; margin-bottom: 10px;")
+        layout.addWidget(instructions)
+        
+        # Form for new credentials
+        form_layout = QFormLayout()
+        
+        new_username = QLineEdit()
+        new_username.setPlaceholderText("New username")
+        new_username.setStyleSheet(self.username_input.styleSheet())
+        form_layout.addRow("New Username:", new_username)
+        
+        new_password = QLineEdit()
+        new_password.setEchoMode(QLineEdit.EchoMode.Password)
+        new_password.setPlaceholderText("New password")
+        new_password.setStyleSheet(self.password_input.styleSheet())
+        form_layout.addRow("New Password:", new_password)
+        
+        confirm_password = QLineEdit()
+        confirm_password.setEchoMode(QLineEdit.EchoMode.Password)
+        confirm_password.setPlaceholderText("Confirm password")
+        confirm_password.setStyleSheet(self.password_input.styleSheet())
+        form_layout.addRow("Confirm Password:", confirm_password)
+        
+        layout.addLayout(form_layout)
+        
+        # Buttons
+        button_layout = QVBoxLayout()
+        
+        create_button = QPushButton("Create Account")
+        create_button.setStyleSheet(self.login_button.styleSheet())
+        
+        def create_account():
+            if not new_username.text() or not new_password.text():
+                QMessageBox.warning(dialog, "Error", "Please fill in all fields")
+                return
+            
+            if new_password.text() != confirm_password.text():
+                QMessageBox.warning(dialog, "Error", "Passwords do not match")
+                return
+            
+            # Create the account
+            success, message = self.create_local_account(new_username.text(), new_password.text())
+            if success:
+                QMessageBox.information(dialog, "Success", "Account created successfully!")
+                # Update the login form with new credentials
+                self.username_input.setText(new_username.text())
+                self.password_input.setText(new_password.text())
+                dialog.accept()
+            else:
+                QMessageBox.warning(dialog, "Error", f"Failed to create account: {message}")
+        
+        create_button.clicked.connect(create_account)
+        button_layout.addWidget(create_button)
+        
+        cancel_button = QPushButton("Cancel")
+        cancel_button.setStyleSheet("""
+            QPushButton {
+                background-color: #6c757d;
+                color: white;
+                border: none;
+                padding: 12px;
+                border-radius: 4px;
+                font-size: 12pt;
+            }
+            QPushButton:hover {
+                background-color: #545b62;
+            }
+        """)
+        cancel_button.clicked.connect(dialog.reject)
+        button_layout.addWidget(cancel_button)
+        
+        layout.addLayout(button_layout)
+        
+        dialog.exec()
+    
+    def create_local_account(self, username: str, password: str) -> tuple[bool, str]:
+        """Create new local account (moved from worker for direct access)"""
+        try:
+            credentials_dir = Path.home() / ".dataplatform"
+            credentials_dir.mkdir(parents=True, exist_ok=True)
+            
+            credentials_file = credentials_dir / "credentials.json"
+            
+            # Hash password (in production, use bcrypt or similar)
+            password_hash = hashlib.sha256(password.encode()).hexdigest()
+            
+            credentials = {
+                'username': username,
+                'password_hash': password_hash,
+                'created': str(Path.cwd()),  # Use current timestamp in production
+                'auth_type': 'local'
+            }
+            
+            with open(credentials_file, 'w') as f:
+                json.dump(credentials, f)
+                
+            return True, "Local account created successfully"
+            
+        except Exception as e:
+            logger.error(f"Error creating local account: {e}")
+            return False, f"Failed to create account: {str(e)}"
         
     def get_user_info(self) -> Dict[str, Any]:
         """Get authenticated user information"""

@@ -6,9 +6,10 @@ Main entry point for the PyQt6 data platform application
 
 import sys
 
-from PyQt6.QtWidgets import QApplication
+from PyQt6.QtWidgets import QApplication, QMessageBox
 
 from ui.main_window import MainWindow
+from ui.dialogs.login_dialog import LoginDialog
 from config.config_manager import ConfigManager
 from utils.logging_setup import setup_logging
 
@@ -32,11 +33,21 @@ def main():
     except:
         pass
     
-    # Create config manager and main window
+    # Create config manager
     config_manager = ConfigManager()
-    main_window = MainWindow(config_manager)
     
-    # Show the main window
+    # Show login dialog first
+    login_dialog = LoginDialog()
+    
+    # If login is cancelled, exit the application
+    if login_dialog.exec() != LoginDialog.DialogCode.Accepted:
+        sys.exit(0)
+    
+    # Get user info from successful login
+    user_info = login_dialog.get_user_info()
+    
+    # Create and show main window only after successful login
+    main_window = MainWindow(config_manager, user_info)
     main_window.show()
     
     # Run the application
