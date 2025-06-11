@@ -428,6 +428,12 @@ class MainWindow(QMainWindow):
         file_menu.addAction(save_action)
         
         file_menu.addSeparator()
+
+        logout_action = QAction("Logout", self)
+        logout_action.triggered.connect(self.logout)
+        file_menu.addAction(logout_action)
+
+        file_menu.addSeparator()
         
         exit_action = QAction("Exit", self)
         exit_action.triggered.connect(self.close)
@@ -453,10 +459,6 @@ class MainWindow(QMainWindow):
         change_password_action = QAction("Change Password", self)
         change_password_action.triggered.connect(self.show_change_password)
         tools_menu.addAction(change_password_action)
-        
-        logout_action = QAction("Logout", self)
-        logout_action.triggered.connect(self.logout)
-        tools_menu.addAction(logout_action)
         
         # View menu
         view_menu = menubar.addMenu("View")
