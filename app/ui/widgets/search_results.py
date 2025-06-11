@@ -120,11 +120,21 @@ class SearchResultItem(QFrame):
         # Footer with actions and metadata
         footer_layout = QHBoxLayout()
         
-        # Owner information
-        owner = self.result_data.get('owner', 'Unknown')
-        owner_label = QLabel(f"Owner: {owner}")
-        owner_label.setStyleSheet("color: #666; font-size: 9pt;")
+        # Dataset and metadata information
+        fileset_name = self.result_data.get('fileset_name', self.result_data.get('owner', 'Unknown'))
+        owner_label = QLabel(f"Dataset: {fileset_name}")
+        owner_label.setStyleSheet("color: #666; font-size: 9pt; font-weight: bold;")
         footer_layout.addWidget(owner_label)
+        
+        # Show tags if available
+        tags = self.result_data.get('tags', [])
+        if tags and isinstance(tags, list) and tags:
+            tags_text = ', '.join(tags[:3])  # Show first 3 tags
+            if len(tags) > 3:
+                tags_text += f' +{len(tags)-3}'
+            tags_label = QLabel(f"Tags: {tags_text}")
+            tags_label.setStyleSheet("color: #666; font-size: 8pt; font-style: italic;")
+            footer_layout.addWidget(tags_label)
         
         # Last modified
         last_modified = self.result_data.get('last_modified', '')
@@ -270,19 +280,38 @@ class SearchWorker(QThread):
                     from pathlib import Path
                     file_name = Path(result.get('file_path', 'Unknown')).name
                         
+                    # Get enhanced metadata from vector search result
+                    fileset_name = result.get('fileset_name', 'Unknown Dataset')
+                    schema_info = result.get('schema_info', '')
+                    tags = result.get('tags', '').split(',') if result.get('tags') else []
+                    user_description = result.get('user_description', '')
+                    
+                    # Create enhanced summary with metadata context
+                    summary_parts = []
+                    if user_description:
+                        summary_parts.append(f"📝 {user_description}")
+                    if schema_info:
+                        summary_parts.append(f"🏗️ {schema_info}")
+                    summary_parts.append(content)
+                    enhanced_summary = '\n'.join(summary_parts)
+                    
                     transformed_results.append({
                         'title': result.get('title', 'Untitled'),
                         'source_type': 'Document',
                         'source_path': result.get('file_path', 'Unknown'),
-                        'summary': content,
-                        'owner': 'File System',
+                        'summary': enhanced_summary,
+                        'owner': fileset_name,  # Use fileset name as owner
                         'last_modified': '',
                         'access_level': 'Full',
                         'can_chat': True,
                         'score': result.get('similarity', 0.0),
                         'file_type': result.get('file_type', ''),
                         'chunk_index': result.get('chunk_index', 0),
-                        'document_id': result.get('document_id')
+                        'document_id': result.get('document_id'),
+                        'fileset_name': fileset_name,
+                        'schema_info': schema_info,
+                        'tags': tags,
+                        'user_description': user_description
                     })
                     
             return transformed_results

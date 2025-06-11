@@ -353,36 +353,112 @@ class FileBrowser(QWidget):
         
     def start_indexing_with_metadata(self, metadata: Dict[str, Any]):
         """Start indexing with specific metadata for new directory"""
-        self.start_indexing()
         # Store metadata for use during vector indexing
         self.pending_metadata = metadata
+        self.start_indexing()
         
     def trigger_vector_indexing(self):
-        """Trigger vector indexing of watched directories"""
+        """Trigger vector indexing of watched directories with metadata"""
         try:
             from utils.vector_search import VectorSearchEngine
+            from PyQt6.QtCore import QThread, pyqtSignal
+            
+            # Create background worker for vector indexing
+            class VectorIndexingWorker(QThread):
+                progress_updated = pyqtSignal(str)  # status message
+                indexing_complete = pyqtSignal(dict)  # results
+                error_occurred = pyqtSignal(str)  # error message
+                
+                def __init__(self, config_manager, watched_dirs, metadata):
+                    super().__init__()
+                    self.config_manager = config_manager
+                    self.watched_dirs = watched_dirs
+                    self.metadata = metadata
+                    
+                def run(self):
+                    try:
+                        vector_engine = VectorSearchEngine(self.config_manager)
+                        total_results = {
+                            'total_directories': len(self.watched_dirs),
+                            'indexed_directories': 0,
+                            'total_files': 0,
+                            'indexed_files': 0,
+                            'errors': []
+                        }
+                        
+                        for directory in self.watched_dirs:
+                            if Path(directory).exists():
+                                self.progress_updated.emit(f"Indexing directory: {Path(directory).name}")
+                                
+                                # Use pending metadata if available, otherwise auto-generate
+                                if hasattr(self, 'metadata') and self.metadata:
+                                    metadata = self.metadata
+                                else:
+                                    metadata = {
+                                        'fileset_name': Path(directory).name,
+                                        'description': f"Files from {directory}",
+                                        'tags': ['files', 'local']
+                                    }
+                                
+                                results = vector_engine.index_directory(
+                                    directory,
+                                    fileset_name=metadata.get('fileset_name'),
+                                    fileset_description=metadata.get('description'),
+                                    tags=metadata.get('tags', [])
+                                )
+                                
+                                total_results['indexed_directories'] += 1
+                                total_results['total_files'] += results.get('total_files', 0)
+                                total_results['indexed_files'] += results.get('indexed_files', 0)
+                                total_results['errors'].extend(results.get('errors', []))
+                                
+                        self.indexing_complete.emit(total_results)
+                        
+                    except Exception as e:
+                        self.error_occurred.emit(str(e))
             
             vector_engine = VectorSearchEngine(self.config_manager)
             watched_dirs = self.config_manager.get("file_management.watched_directories", [])
             
-            for directory in watched_dirs:
-                if Path(directory).exists():
-                    # Use pending metadata if available
-                    metadata = getattr(self, 'pending_metadata', {})
-                    
-                    vector_engine.index_directory(
-                        directory,
-                        fileset_name=metadata.get('fileset_name'),
-                        fileset_description=metadata.get('description'),
-                        tags=metadata.get('tags', [])
-                    )
-                    
+            if watched_dirs:
+                # Use pending metadata if available
+                metadata = getattr(self, 'pending_metadata', {})
+                
+                # Start background vector indexing
+                self.vector_worker = VectorIndexingWorker(self.config_manager, watched_dirs, metadata)
+                self.vector_worker.progress_updated.connect(self.on_vector_progress)
+                self.vector_worker.indexing_complete.connect(self.on_vector_complete)
+                self.vector_worker.error_occurred.connect(self.on_vector_error)
+                self.vector_worker.start()
+                
+                # Update status
+                self.status_label.setText("Vector indexing in progress...")
+                
             # Clear pending metadata
             if hasattr(self, 'pending_metadata'):
                 delattr(self, 'pending_metadata')
                 
         except Exception as e:
             logger.warning(f"Vector indexing failed: {e}")
+            
+    def on_vector_progress(self, status: str):
+        """Handle vector indexing progress"""
+        self.status_label.setText(f"Vector indexing: {status}")
+        
+    def on_vector_complete(self, results: Dict[str, Any]):
+        """Handle vector indexing completion"""
+        indexed_files = results.get('indexed_files', 0)
+        total_files = results.get('total_files', 0)
+        
+        if indexed_files > 0:
+            self.status_label.setText(f"Found {total_files} files, {indexed_files} indexed for vector search")
+        else:
+            self.status_label.setText(f"Found {total_files} files in watched directories")
+            
+    def on_vector_error(self, error: str):
+        """Handle vector indexing error"""
+        logger.error(f"Vector indexing error: {error}")
+        # Don't show error to user unless it's critical, just log it
         
     def on_indexing_progress(self, progress: int, current_file: str):
         """Handle indexing progress updates"""
@@ -612,13 +688,19 @@ class DirectoryMetadataDialog(QDialog):
         self.tags.setPlaceholderText("customer, analytics, pii, sales (comma-separated)")
         form_layout.addRow("Tags:", self.tags)
         
+        # Schema information
+        self.schema_info = QTextEdit()
+        self.schema_info.setMaximumHeight(80)
+        self.schema_info.setPlaceholderText("Describe the data structure, columns, or file formats...")
+        form_layout.addRow("Schema/Structure:", self.schema_info)
+        
         # Auto-detect file types
-        self.auto_detect_btn = QPushButton("Auto-Detect File Types")
+        self.auto_detect_btn = QPushButton("Auto-Detect File Types & Schema")
         self.auto_detect_btn.clicked.connect(self.auto_detect_files)
         form_layout.addRow("", self.auto_detect_btn)
         
         # File type summary
-        self.file_summary = QLabel("Click 'Auto-Detect' to see file types in this directory")
+        self.file_summary = QLabel("Click 'Auto-Detect' to see file types and suggested schema")
         self.file_summary.setStyleSheet("color: #666; font-style: italic;")
         self.file_summary.setWordWrap(True)
         form_layout.addRow("File Types:", self.file_summary)
@@ -659,11 +741,12 @@ class DirectoryMetadataDialog(QDialog):
         layout.addLayout(button_layout)
         
     def auto_detect_files(self):
-        """Auto-detect file types in the directory"""
+        """Auto-detect file types and suggest schema in the directory"""
         try:
             directory = Path(self.directory_path)
             file_types = {}
             total_files = 0
+            sample_files = {}  # Store sample files for schema detection
             
             for file_path in directory.rglob('*'):
                 if file_path.is_file():
@@ -671,6 +754,11 @@ class DirectoryMetadataDialog(QDialog):
                     ext = file_path.suffix.lower()
                     if ext:
                         file_types[ext] = file_types.get(ext, 0) + 1
+                        # Store first few files of each type for schema analysis
+                        if ext not in sample_files:
+                            sample_files[ext] = []
+                        if len(sample_files[ext]) < 3:  # Keep up to 3 samples per type
+                            sample_files[ext].append(file_path)
                     else:
                         file_types['(no extension)'] = file_types.get('(no extension)', 0) + 1
                         
@@ -690,20 +778,161 @@ class DirectoryMetadataDialog(QDialog):
                 suggested_tags = []
                 if '.csv' in file_types or '.xlsx' in file_types:
                     suggested_tags.append('data')
+                    suggested_tags.append('tabular')
                 if '.py' in file_types:
                     suggested_tags.append('code')
+                    suggested_tags.append('python')
                 if '.md' in file_types or '.txt' in file_types:
                     suggested_tags.append('documentation')
+                    suggested_tags.append('text')
                 if '.json' in file_types:
                     suggested_tags.append('config')
+                    suggested_tags.append('structured')
+                if '.pdf' in file_types:
+                    suggested_tags.append('documents')
+                    suggested_tags.append('reports')
                     
                 if suggested_tags and not self.tags.text():
                     self.tags.setText(', '.join(suggested_tags))
+                    
+                # Auto-suggest schema information
+                schema_suggestions = self._analyze_schema(sample_files, file_types)
+                if schema_suggestions and not self.schema_info.toPlainText():
+                    self.schema_info.setPlainText(schema_suggestions)
+                    
             else:
                 self.file_summary.setText("No files found in directory")
                 
         except Exception as e:
             self.file_summary.setText(f"Error scanning directory: {str(e)}")
+            
+    def _analyze_schema(self, sample_files: Dict[str, list], file_types: Dict[str, int]) -> str:
+        """Analyze sample files to suggest schema information"""
+        schema_parts = []
+        
+        try:
+            # Analyze CSV files
+            if '.csv' in sample_files:
+                csv_schema = self._analyze_csv_schema(sample_files['.csv'])
+                if csv_schema:
+                    schema_parts.append(f"CSV Files ({file_types['.csv']} files):\n{csv_schema}")
+                    
+            # Analyze JSON files
+            if '.json' in sample_files:
+                json_schema = self._analyze_json_schema(sample_files['.json'])
+                if json_schema:
+                    schema_parts.append(f"JSON Files ({file_types['.json']} files):\n{json_schema}")
+                    
+            # Analyze Python files
+            if '.py' in sample_files:
+                py_schema = self._analyze_python_schema(sample_files['.py'])
+                if py_schema:
+                    schema_parts.append(f"Python Files ({file_types['.py']} files):\n{py_schema}")
+                    
+            # Add general file type summary
+            if len(file_types) > 3:
+                other_types = [ext for ext in file_types.keys() if ext not in ['.csv', '.json', '.py']]
+                if other_types:
+                    schema_parts.append(f"Other file types: {', '.join(other_types[:5])}")
+                    
+        except Exception as e:
+            logger.warning(f"Error analyzing schema: {e}")
+            
+        return '\n\n'.join(schema_parts) if schema_parts else ""
+        
+    def _analyze_csv_schema(self, csv_files: list) -> str:
+        """Analyze CSV files to determine schema"""
+        try:
+            import csv
+            
+            for csv_file in csv_files[:2]:  # Check first 2 CSV files
+                try:
+                    with open(csv_file, 'r', encoding='utf-8', errors='ignore') as f:
+                        # Read first few lines to detect structure
+                        sample_lines = [f.readline().strip() for _ in range(5)]
+                        sample_lines = [line for line in sample_lines if line]
+                        
+                        if sample_lines:
+                            # Try to detect delimiter
+                            sniffer = csv.Sniffer()
+                            delimiter = sniffer.sniff(sample_lines[0]).delimiter
+                            
+                            # Parse header
+                            reader = csv.reader([sample_lines[0]], delimiter=delimiter)
+                            headers = next(reader)
+                            
+                            if len(headers) > 1:
+                                return f"Columns: {', '.join(headers[:10])}{'...' if len(headers) > 10 else ''} ({len(headers)} total columns)"
+                                
+                except Exception:
+                    continue
+                    
+        except Exception:
+            pass
+            
+        return "Tabular data files (structure detection failed)"
+        
+    def _analyze_json_schema(self, json_files: list) -> str:
+        """Analyze JSON files to determine schema"""
+        try:
+            import json
+            
+            for json_file in json_files[:2]:  # Check first 2 JSON files
+                try:
+                    with open(json_file, 'r', encoding='utf-8') as f:
+                        data = json.load(f)
+                        
+                        if isinstance(data, dict):
+                            keys = list(data.keys())[:10]
+                            return f"Object with keys: {', '.join(keys)}{'...' if len(data) > 10 else ''}"
+                        elif isinstance(data, list) and data and isinstance(data[0], dict):
+                            keys = list(data[0].keys())[:10]
+                            return f"Array of objects with keys: {', '.join(keys)}{'...' if len(data[0]) > 10 else ''}"
+                        elif isinstance(data, list):
+                            return f"Array with {len(data)} items"
+                        else:
+                            return f"JSON data of type: {type(data).__name__}"
+                            
+                except Exception:
+                    continue
+                    
+        except Exception:
+            pass
+            
+        return "Structured JSON data"
+        
+    def _analyze_python_schema(self, py_files: list) -> str:
+        """Analyze Python files to determine content type"""
+        try:
+            keywords = {
+                'class ': 'classes',
+                'def ': 'functions', 
+                'import ': 'modules',
+                'from ': 'imports',
+                'if __name__': 'scripts'
+            }
+            
+            found_patterns = set()
+            
+            for py_file in py_files[:3]:  # Check first 3 Python files
+                try:
+                    with open(py_file, 'r', encoding='utf-8', errors='ignore') as f:
+                        content = f.read()
+                        
+                        for keyword, pattern_type in keywords.items():
+                            if keyword in content:
+                                found_patterns.add(pattern_type)
+                                
+                except Exception:
+                    continue
+                    
+            if found_patterns:
+                return f"Python code containing: {', '.join(sorted(found_patterns))}"
+                
+        except Exception:
+            pass
+            
+        return "Python source code"
             
     def get_metadata(self) -> Dict[str, Any]:
         """Get the collected metadata"""
@@ -712,6 +941,7 @@ class DirectoryMetadataDialog(QDialog):
         return {
             'fileset_name': self.fileset_name.text().strip(),
             'description': self.description.toPlainText().strip(),
+            'schema_info': self.schema_info.toPlainText().strip(),
             'tags': tags_list,
             'directory_path': self.directory_path
         }

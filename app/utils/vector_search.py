@@ -438,12 +438,14 @@ class VectorSearchEngine:
                 except Exception as e:
                     logger.error(f"Error generating embedding for chunk {embedding_id}: {e}")
                     
-            # Update document with indexing info
+            # Update document with indexing info and metadata
             cursor.execute("""
                 UPDATE documents 
-                SET indexed_at = ?, chunk_count = ?
+                SET indexed_at = ?, chunk_count = ?, fileset_name = ?, fileset_description = ?, 
+                    schema_info = ?, tags = ?, user_description = ?
                 WHERE id = ?
-            """, (datetime.now(), len(chunks), document_id))
+            """, (datetime.now(), len(chunks), fileset_name, fileset_description, 
+                  final_schema, tags_str, user_description, document_id))
             
             conn.commit()
             conn.close()
@@ -542,7 +544,8 @@ class VectorSearchEngine:
             
             cursor.execute("""
                 SELECT c.id, c.document_id, c.chunk_index, c.content, c.embedding_id,
-                       d.file_path, d.title, d.file_type
+                       d.file_path, d.title, d.file_type, d.fileset_name, d.fileset_description,
+                       d.schema_info, d.tags, d.user_description
                 FROM chunks c
                 JOIN documents d ON c.document_id = d.id
                 WHERE d.indexed_at IS NOT NULL
@@ -561,7 +564,8 @@ class VectorSearchEngine:
             results = []
             
             for chunk_data in chunks:
-                chunk_id, doc_id, chunk_idx, content, embedding_id, file_path, title, file_type = chunk_data
+                (chunk_id, doc_id, chunk_idx, content, embedding_id, file_path, title, file_type,
+                 fileset_name, fileset_description, schema_info, tags, user_description) = chunk_data
                 
                 # Load embedding
                 embedding_file = self.embeddings_path / f"{embedding_id}.npy"
@@ -585,7 +589,12 @@ class VectorSearchEngine:
                             'file_type': file_type,
                             'content': content,
                             'similarity': float(similarity),
-                            'chunk_index': chunk_idx
+                            'chunk_index': chunk_idx,
+                            'fileset_name': fileset_name or 'Unknown Dataset',
+                            'fileset_description': fileset_description or '',
+                            'schema_info': schema_info or '',
+                            'tags': tags or '',
+                            'user_description': user_description or ''
                         })
                         
                 except Exception as e:
