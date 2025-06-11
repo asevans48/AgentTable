@@ -740,98 +740,37 @@ class FileBrowser(QWidget):
         self.indexer_worker.indexing_complete.connect(self.on_indexing_complete)
         self.indexer_worker.start()
         
-        # Also trigger vector indexing
-        self.trigger_vector_indexing()
+        # Don't automatically trigger vector indexing
+        # Users must manually trigger it via the search section
         
     def start_indexing_with_metadata(self, metadata: Dict[str, Any]):
         """Start indexing with specific metadata for new directory"""
-        # Store metadata for use during vector indexing
+        # Store metadata for potential vector indexing
         self.pending_metadata = metadata
         self.start_indexing()
         
+        # Show message about vector indexing
+        from PyQt6.QtWidgets import QMessageBox
+        QMessageBox.information(
+            self,
+            "Directory Added",
+            f"Directory '{metadata.get('fileset_name', 'Unknown')}' has been added to the file browser.\n\n"
+            "To enable vector search for this directory, go to the Search section and click 'Rebuild Index'."
+        )
+        
     def trigger_vector_indexing(self):
-        """Trigger vector indexing of watched directories with metadata"""
-        try:
-            from utils.vector_search import VectorSearchEngine
-            from PyQt6.QtCore import QThread, pyqtSignal
-            
-            # Create background worker for vector indexing
-            class VectorIndexingWorker(QThread):
-                progress_updated = pyqtSignal(str)  # status message
-                indexing_complete = pyqtSignal(dict)  # results
-                error_occurred = pyqtSignal(str)  # error message
-                
-                def __init__(self, config_manager, watched_dirs, metadata):
-                    super().__init__()
-                    self.config_manager = config_manager
-                    self.watched_dirs = watched_dirs
-                    self.metadata = metadata
-                    
-                def run(self):
-                    try:
-                        vector_engine = VectorSearchEngine(self.config_manager)
-                        total_results = {
-                            'total_directories': len(self.watched_dirs),
-                            'indexed_directories': 0,
-                            'total_files': 0,
-                            'indexed_files': 0,
-                            'errors': []
-                        }
-                        
-                        for directory in self.watched_dirs:
-                            if Path(directory).exists():
-                                self.progress_updated.emit(f"Indexing directory: {Path(directory).name}")
-                                
-                                # Use pending metadata if available, otherwise auto-generate
-                                if hasattr(self, 'metadata') and self.metadata:
-                                    metadata = self.metadata
-                                else:
-                                    metadata = {
-                                        'fileset_name': Path(directory).name,
-                                        'description': f"Files from {directory}",
-                                        'tags': ['files', 'local']
-                                    }
-                                
-                                results = vector_engine.index_directory(
-                                    directory,
-                                    fileset_name=metadata.get('fileset_name'),
-                                    fileset_description=metadata.get('description'),
-                                    tags=metadata.get('tags', [])
-                                )
-                                
-                                total_results['indexed_directories'] += 1
-                                total_results['total_files'] += results.get('total_files', 0)
-                                total_results['indexed_files'] += results.get('indexed_files', 0)
-                                total_results['errors'].extend(results.get('errors', []))
-                                
-                        self.indexing_complete.emit(total_results)
-                        
-                    except Exception as e:
-                        self.error_occurred.emit(str(e))
-            
-            vector_engine = VectorSearchEngine(self.config_manager)
-            watched_dirs = self.config_manager.get("file_management.watched_directories", [])
-            
-            if watched_dirs:
-                # Use pending metadata if available
-                metadata = getattr(self, 'pending_metadata', {})
-                
-                # Start background vector indexing
-                self.vector_worker = VectorIndexingWorker(self.config_manager, watched_dirs, metadata)
-                self.vector_worker.progress_updated.connect(self.on_vector_progress)
-                self.vector_worker.indexing_complete.connect(self.on_vector_complete)
-                self.vector_worker.error_occurred.connect(self.on_vector_error)
-                self.vector_worker.start()
-                
-                # Update status
-                self.status_label.setText("Vector indexing in progress...")
-                
-            # Clear pending metadata
-            if hasattr(self, 'pending_metadata'):
-                delattr(self, 'pending_metadata')
-                
-        except Exception as e:
-            logger.warning(f"Vector indexing failed: {e}")
+        """Show message about manual vector indexing"""
+        from PyQt6.QtWidgets import QMessageBox
+        
+        watched_dirs = self.config_manager.get("file_management.watched_directories", [])
+        if watched_dirs:
+            QMessageBox.information(
+                self,
+                "Vector Search Indexing",
+                f"Found {len(watched_dirs)} watched directories.\n\n"
+                "To enable vector search for these directories, go to the Search section and click 'Rebuild Index'.\n\n"
+                "This allows you to control when the potentially time-consuming indexing process runs."
+            )
             
     def on_vector_progress(self, status: str):
         """Handle vector indexing progress"""

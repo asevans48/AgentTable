@@ -308,42 +308,69 @@ class VectorSearchEngine:
             return ""
             
     def _extract_text_content(self, file_path: str) -> str:
-        """Extract text content from various file types"""
+        """Extract text content from various file types with size limits"""
         file_path = Path(file_path)
         content = ""
         
         try:
+            # Check file size first - skip files larger than 10MB
+            file_size = file_path.stat().st_size
+            max_file_size = 10 * 1024 * 1024  # 10MB
+            
+            if file_size > max_file_size:
+                logger.warning(f"Skipping large file {file_path}: {file_size} bytes > {max_file_size} bytes")
+                return f"File: {file_path.name}\nType: {file_path.suffix}\nFile too large for indexing ({file_size:,} bytes)"
+            
+            # Maximum content to read (1MB)
+            max_content_size = 1024 * 1024  # 1MB
+            
             if file_path.suffix.lower() == '.txt':
                 with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                    content = f.read()
+                    content = f.read(max_content_size)
                     
             elif file_path.suffix.lower() == '.md':
                 with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                    content = f.read()
+                    content = f.read(max_content_size)
                     
             elif file_path.suffix.lower() == '.py':
                 with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                    content = f.read()
+                    content = f.read(max_content_size)
                     
             elif file_path.suffix.lower() == '.json':
                 with open(file_path, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                    content = json.dumps(data, indent=2)
+                    # For JSON, read limited content and try to parse
+                    raw_content = f.read(max_content_size)
+                    try:
+                        data = json.loads(raw_content)
+                        content = json.dumps(data, indent=2)[:max_content_size]
+                    except json.JSONDecodeError:
+                        # If truncated JSON is invalid, just use raw content
+                        content = raw_content
                     
             elif file_path.suffix.lower() == '.csv':
-                # Read first few lines of CSV
+                # Read first 1000 lines or 1MB, whichever is smaller
                 with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                    lines = f.readlines()[:100]  # First 100 lines
+                    lines = []
+                    total_size = 0
+                    for i, line in enumerate(f):
+                        if i >= 1000 or total_size >= max_content_size:
+                            break
+                        lines.append(line)
+                        total_size += len(line.encode('utf-8'))
                     content = ''.join(lines)
                     
             else:
-                # Try to read as text
+                # Try to read as text with size limit
                 with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                    content = f.read()[:10000]  # First 10KB
+                    content = f.read(max_content_size)
+                    
+            # Add truncation notice if content was limited
+            if len(content) >= max_content_size - 100:  # Close to limit
+                content += "\n\n[Content truncated for indexing]"
                     
         except Exception as e:
             logger.warning(f"Could not extract text from {file_path}: {e}")
-            content = f"File: {file_path.name}\nType: {file_path.suffix}\nContent could not be extracted."
+            content = f"File: {file_path.name}\nType: {file_path.suffix}\nContent could not be extracted: {str(e)}"
             
         return content
         
@@ -541,8 +568,8 @@ class VectorSearchEngine:
             
     def index_directory(self, directory_path: str, file_extensions: List[str] = None, 
                        fileset_name: str = None, fileset_description: str = None,
-                       tags: List[str] = None) -> Dict[str, Any]:
-        """Index all supported files in a directory with dataset metadata"""
+                       tags: List[str] = None, max_files: int = 1000) -> Dict[str, Any]:
+        """Index supported files in a directory with dataset metadata and limits"""
         if file_extensions is None:
             file_extensions = ['.txt', '.md', '.py', '.json', '.csv', '.sql']
             
@@ -558,21 +585,45 @@ class VectorSearchEngine:
             'failed_files': 0,
             'skipped_files': 0,
             'errors': [],
-            'fileset_name': fileset_name
+            'fileset_name': fileset_name,
+            'truncated': False
         }
         
         try:
-            # First pass: count total files for progress tracking
+            # First pass: count and collect files with size filtering
             all_files = []
+            max_file_size = 10 * 1024 * 1024  # 10MB limit
+            
             for file_path in directory_path.rglob('*'):
                 if file_path.is_file() and file_path.suffix.lower() in file_extensions:
-                    all_files.append(file_path)
+                    try:
+                        # Check file size before adding to list
+                        file_size = file_path.stat().st_size
+                        if file_size <= max_file_size:
+                            all_files.append(file_path)
+                        else:
+                            results['skipped_files'] += 1
+                            logger.info(f"Skipping large file: {file_path} ({file_size:,} bytes)")
+                            
+                        # Stop if we've found too many files
+                        if len(all_files) >= max_files:
+                            results['truncated'] = True
+                            logger.warning(f"Limiting indexing to first {max_files} files in {directory_path}")
+                            break
+                            
+                    except Exception as e:
+                        logger.warning(f"Error checking file {file_path}: {e}")
+                        results['skipped_files'] += 1
                     
             results['total_files'] = len(all_files)
             
             # Second pass: index files with metadata
-            for file_path in all_files:
+            for i, file_path in enumerate(all_files):
                 try:
+                    # Log progress every 50 files
+                    if i % 50 == 0:
+                        logger.info(f"Indexing progress: {i}/{len(all_files)} files")
+                        
                     if self.index_document(
                         str(file_path), 
                         fileset_name=fileset_name,
@@ -584,6 +635,7 @@ class VectorSearchEngine:
                     else:
                         results['skipped_files'] += 1
                         logger.debug(f"Skipped (no content): {file_path}")
+                        
                 except Exception as e:
                     results['failed_files'] += 1
                     error_msg = f"{file_path.name}: {str(e)}"

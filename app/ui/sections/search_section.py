@@ -241,14 +241,24 @@ class VectorSearchTab(QWidget):
         
         instructions = QLabel("""
 <b>Vector Search Instructions:</b><br>
-• Click "Rebuild Index" to index all files in watched directories<br>
-• Use the main search bar to perform semantic searches<br>
+• <b>Manual Indexing Required:</b> Click "Rebuild Index" to index files<br>
+• Indexing is limited to files under 10MB and max 1000 files per directory<br>
+• Use the main search bar to perform semantic searches after indexing<br>
 • Results show content chunks with similarity scores<br>
 • Adjust similarity threshold to filter results
         """)
         instructions.setStyleSheet("color: #495057; font-size: 9pt; line-height: 1.4;")
         instructions.setWordWrap(True)
         instructions_layout.addWidget(instructions)
+        
+        # Warning about large files
+        warning = QLabel("""
+<b>⚠️ Performance Note:</b> Vector indexing can be time-consuming for large datasets. 
+Files larger than 10MB are automatically skipped to prevent performance issues.
+        """)
+        warning.setStyleSheet("color: #856404; background-color: #fff3cd; border: 1px solid #ffeaa7; border-radius: 4px; padding: 8px; margin-top: 8px; font-size: 8pt;")
+        warning.setWordWrap(True)
+        instructions_layout.addWidget(warning)
         
         layout.addWidget(instructions_frame)
         
