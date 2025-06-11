@@ -320,7 +320,12 @@ class VectorSearchEngine:
             file_hash = self._get_file_hash(file_path)
             
             # Check if document is already indexed and unchanged
-            conn = sqlite3.connect(self.vector_db_path)
+            db_path_str = str(self.vector_db_path.resolve())
+            if not Path(db_path_str).exists():
+                logger.error(f"Vector database not found at: {db_path_str}")
+                return False
+                
+            conn = sqlite3.connect(db_path_str)
             cursor = conn.cursor()
             
             cursor.execute("SELECT file_hash, indexed_at FROM documents WHERE file_path = ?", (file_path,))
@@ -458,8 +463,15 @@ class VectorSearchEngine:
             # Generate query embedding
             query_embedding = self.model.encode([query])[0]
             
-            # Get all chunks from database
-            conn = sqlite3.connect(self.vector_db_path)
+            # Get all chunks from database using absolute path
+            db_path_str = str(self.vector_db_path.resolve())
+            if not Path(db_path_str).exists():
+                return [{
+                    'message': 'Vector database not found',
+                    'suggestion': 'Please rebuild the vector search index'
+                }]
+                
+            conn = sqlite3.connect(db_path_str)
             cursor = conn.cursor()
             
             cursor.execute("""
@@ -542,7 +554,12 @@ class VectorSearchEngine:
     def get_indexed_documents(self) -> List[Dict[str, Any]]:
         """Get list of all indexed documents"""
         try:
-            conn = sqlite3.connect(self.vector_db_path)
+            db_path_str = str(self.vector_db_path.resolve())
+            if not Path(db_path_str).exists():
+                logger.warning(f"Vector database not found at: {db_path_str}")
+                return []
+                
+            conn = sqlite3.connect(db_path_str)
             cursor = conn.cursor()
             
             cursor.execute("""
@@ -576,7 +593,14 @@ class VectorSearchEngine:
         """Clear all indexed documents and embeddings"""
         try:
             # Clear database
-            conn = sqlite3.connect(self.vector_db_path)
+            db_path_str = str(self.vector_db_path.resolve())
+            if not Path(db_path_str).exists():
+                logger.warning(f"Vector database not found at: {db_path_str}")
+                # Re-initialize the database
+                self._init_database()
+                return
+                
+            conn = sqlite3.connect(db_path_str)
             cursor = conn.cursor()
             
             cursor.execute("DELETE FROM chunks")
@@ -638,7 +662,20 @@ class VectorSearchEngine:
     def get_index_stats(self) -> Dict[str, Any]:
         """Get statistics about the current index"""
         try:
-            conn = sqlite3.connect(self.vector_db_path)
+            db_path_str = str(self.vector_db_path.resolve())
+            if not Path(db_path_str).exists():
+                return {
+                    'document_count': 0,
+                    'chunk_count': 0,
+                    'total_size_bytes': 0,
+                    'file_types': {},
+                    'recent_indexing_count': 0,
+                    'embeddings_path': str(self.embeddings_path),
+                    'database_path': str(self.vector_db_path),
+                    'status': 'Database not found'
+                }
+                
+            conn = sqlite3.connect(db_path_str)
             cursor = conn.cursor()
             
             # Get document count
