@@ -339,6 +339,41 @@ class VectorSearchEngine:
                 
         return chunks
         
+    def _create_enhanced_content(self, chunk: str, title: str, fileset_name: str = None, 
+                               fileset_description: str = None, tags: List[str] = None,
+                               user_description: str = None, schema_info: str = None) -> str:
+        """Create enhanced content for better vector search by including comprehensive metadata"""
+        enhanced_parts = []
+        
+        # Add structured metadata for better search context
+        if fileset_name:
+            enhanced_parts.append(f"Dataset: {fileset_name}")
+        if title:
+            enhanced_parts.append(f"Document: {title}")
+        if fileset_description:
+            enhanced_parts.append(f"Dataset Purpose: {fileset_description}")
+        if user_description:
+            enhanced_parts.append(f"Description: {user_description}")
+        if schema_info:
+            enhanced_parts.append(f"Data Structure: {schema_info}")
+        if tags:
+            enhanced_parts.append(f"Categories: {', '.join(tags)}")
+            
+        # Add searchable keywords based on metadata
+        search_keywords = []
+        if fileset_name:
+            search_keywords.extend(fileset_name.lower().split('_'))
+        if tags:
+            search_keywords.extend([tag.lower() for tag in tags])
+        if search_keywords:
+            enhanced_parts.append(f"Keywords: {' '.join(set(search_keywords))}")
+            
+        # Add the actual content with clear separation
+        enhanced_parts.append("---")  # Separator
+        enhanced_parts.append(chunk)
+        
+        return '\n'.join(enhanced_parts)
+        
     def index_document(self, file_path: str, fileset_name: str = None, fileset_description: str = None, 
                       schema_info: str = None, tags: List[str] = None, user_description: str = None) -> bool:
         """Index a single document with enhanced metadata"""
