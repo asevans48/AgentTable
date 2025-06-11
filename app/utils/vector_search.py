@@ -856,81 +856,6 @@ class VectorSearchEngine:
             logger.error(f"Error clearing index: {e}")
             raise
             
-    def get_filesets(self) -> List[Dict[str, Any]]:
-        """Get all filesets/datasets"""
-        try:
-            db_path_str = str(self.vector_db_path.resolve())
-            if not Path(db_path_str).exists():
-                return []
-                
-            conn = sqlite3.connect(db_path_str)
-            cursor = conn.cursor()
-            
-            cursor.execute("""
-                SELECT f.name, f.description, f.schema_info, f.tags, f.created_at,
-                       COUNT(d.id) as file_count
-                FROM filesets f
-                LEFT JOIN documents d ON f.name = d.fileset_name
-                GROUP BY f.name, f.description, f.schema_info, f.tags, f.created_at
-                ORDER BY f.updated_at DESC
-            """)
-            
-            results = []
-            for row in cursor.fetchall():
-                results.append({
-                    'name': row[0],
-                    'description': row[1],
-                    'schema_info': row[2],
-                    'tags': row[3].split(',') if row[3] else [],
-                    'created_at': row[4],
-                    'file_count': row[5]
-                })
-                
-            conn.close()
-            return results
-            
-        except Exception as e:
-            logger.error(f"Error getting filesets: {e}")
-            return []
-            
-    def update_document_metadata(self, file_path: str, fileset_name: str = None, 
-                               fileset_description: str = None, tags: List[str] = None,
-                               user_description: str = None) -> bool:
-        """Update metadata for an existing document"""
-        try:
-            db_path_str = str(self.vector_db_path.resolve())
-            if not Path(db_path_str).exists():
-                return False
-                
-            conn = sqlite3.connect(db_path_str)
-            cursor = conn.cursor()
-            
-            # Update document metadata
-            tags_str = ','.join(tags) if tags else ''
-            cursor.execute("""
-                UPDATE documents 
-                SET fileset_name = ?, fileset_description = ?, tags = ?, user_description = ?, updated_at = ?
-                WHERE file_path = ?
-            """, (fileset_name, fileset_description, tags_str, user_description, datetime.now(), file_path))
-            
-            # Update fileset if provided
-            if fileset_name:
-                cursor.execute("""
-                    INSERT OR REPLACE INTO filesets 
-                    (name, description, tags, updated_at)
-                    VALUES (?, ?, ?, ?)
-                """, (fileset_name, fileset_description, tags_str, datetime.now()))
-            
-            conn.commit()
-            conn.close()
-            
-            logger.info(f"Updated metadata for document: {file_path}")
-            return True
-            
-        except Exception as e:
-            logger.error(f"Error updating document metadata: {e}")
-            return False
-            
     def rebuild_index(self, directories: List[str]) -> Dict[str, Any]:
         """Rebuild the entire vector search index"""
         try:
@@ -1034,11 +959,9 @@ class VectorSearchEngine:
             return {
                 'document_count': doc_count,
                 'chunk_count': chunk_count,
-                'fileset_count': fileset_count,
                 'total_size_bytes': total_size,
                 'file_types': file_types,
                 'recent_indexing_count': recent_count,
-                'top_tags': top_tags,
                 'embeddings_path': str(self.embeddings_path),
                 'database_path': str(self.vector_db_path)
             }
