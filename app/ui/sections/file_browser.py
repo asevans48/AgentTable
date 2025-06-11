@@ -194,8 +194,8 @@ class FileBrowser(QWidget):
         self.watched_directories = []
         
         self.setup_ui()
-        self.setup_connections()
         self.setup_file_system_models()
+        self.setup_connections()
         self.load_watched_directories()
         
     def setup_ui(self):
@@ -840,7 +840,10 @@ class FileBrowser(QWidget):
         self.directory_tree.clicked.connect(self.on_directory_tree_clicked)
         self.file_list.clicked.connect(self.on_file_clicked)
         self.file_list.doubleClicked.connect(self.on_file_double_clicked)
-        self.file_list.selectionModel().selectionChanged.connect(self.on_selection_changed)
+        
+        # Connect selection model if it exists
+        if self.file_list.selectionModel():
+            self.file_list.selectionModel().selectionChanged.connect(self.on_selection_changed)
         
         # Watched directories
         self.watched_tree.clicked.connect(self.on_watched_directory_clicked)
