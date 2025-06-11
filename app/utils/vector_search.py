@@ -450,32 +450,34 @@ class VectorSearchEngine:
         
     def index_document(self, file_path: str, fileset_name: str = None, fileset_description: str = None, 
                       schema_info: str = None, tags: List[str] = None, user_description: str = None) -> bool:
-        """Index a single document with enhanced metadata"""
+        """Index a single document with enhanced metadata and duplicate prevention"""
         try:
-            # Handle virtual documents (datasets)
+            # Normalize file path to prevent duplicates
             if file_path.startswith("dataset://"):
+                normalized_path = file_path  # Keep dataset paths as-is
                 file_hash = hashlib.md5(file_path.encode()).hexdigest()
                 content = user_description or f"Virtual dataset document: {file_path}"
                 file_size = len(content.encode('utf-8'))
                 file_type = "dataset"
                 title = file_path.replace("dataset://", "")
             else:
-                file_path = str(Path(file_path).resolve())
-                file_hash = self._get_file_hash(file_path)
+                # Normalize file paths to absolute paths to prevent duplicates
+                normalized_path = str(Path(file_path).resolve())
+                file_hash = self._get_file_hash(normalized_path)
                 
                 # Extract text content
-                content = self._extract_text_content(file_path)
+                content = self._extract_text_content(normalized_path)
                 if not content.strip():
-                    logger.warning(f"No content extracted from {file_path}")
+                    logger.warning(f"No content extracted from {normalized_path}")
                     return False
                     
                 # Get file metadata
-                file_stat = Path(file_path).stat()
+                file_stat = Path(normalized_path).stat()
                 file_size = file_stat.st_size
-                file_type = Path(file_path).suffix.lower()
-                title = Path(file_path).stem
+                file_type = Path(normalized_path).suffix.lower()
+                title = Path(normalized_path).stem
             
-            # Check if document is already indexed and unchanged
+            # Check database exists
             db_path_str = str(self.vector_db_path.resolve())
             if not Path(db_path_str).exists():
                 logger.error(f"Vector database not found at: {db_path_str}")
@@ -484,98 +486,213 @@ class VectorSearchEngine:
             conn = sqlite3.connect(db_path_str)
             cursor = conn.cursor()
             
-            cursor.execute("SELECT file_hash, indexed_at FROM documents WHERE file_path = ?", (file_path,))
-            result = cursor.fetchone()
+            # Check for existing document with comprehensive duplicate detection
+            cursor.execute("""
+                SELECT id, file_hash, indexed_at, fileset_name, fileset_description, 
+                       schema_info, tags, user_description, chunk_count
+                FROM documents WHERE file_path = ?
+            """, (normalized_path,))
+            existing_doc = cursor.fetchone()
             
-            if result and result[0] == file_hash and result[1]:
-                logger.debug(f"Document {file_path} already indexed and unchanged")
-                conn.close()
-                return True
+            # Determine if we need to update or create new
+            needs_content_reindex = False
+            needs_metadata_update = False
+            document_id = None
             
+            if existing_doc:
+                document_id = existing_doc[0]
+                existing_hash = existing_doc[1]
+                existing_indexed_at = existing_doc[2]
+                existing_fileset = existing_doc[3]
+                existing_fileset_desc = existing_doc[4]
+                existing_schema = existing_doc[5]
+                existing_tags = existing_doc[6]
+                existing_user_desc = existing_doc[7]
+                existing_chunk_count = existing_doc[8]
+                
+                # Check if content changed (needs re-indexing)
+                if existing_hash != file_hash or not existing_indexed_at:
+                    needs_content_reindex = True
+                    logger.info(f"Content changed for {normalized_path}, will re-index")
+                
+                # Check if metadata changed (needs metadata merge)
+                if (fileset_name and fileset_name != existing_fileset) or \
+                   (fileset_description and fileset_description != existing_fileset_desc) or \
+                   (schema_info and schema_info != existing_schema) or \
+                   (tags and ','.join(tags) != existing_tags) or \
+                   (user_description and user_description != existing_user_desc):
+                    needs_metadata_update = True
+                    logger.info(f"Metadata changed for {normalized_path}, will merge")
+                
+                # If no changes needed, return success
+                if not needs_content_reindex and not needs_metadata_update:
+                    logger.debug(f"Document {normalized_path} already up-to-date")
+                    conn.close()
+                    return True
+            else:
+                # New document
+                needs_content_reindex = True
+                needs_metadata_update = True
+                logger.info(f"New document to index: {normalized_path}")
+            
+            # Prepare metadata with intelligent merging
             content_preview = content[:200] + "..." if len(content) > 200 else content
             
             # Detect schema for structured files
-            detected_schema = detect_schema(file_path, content)
-            final_schema = schema_info or detected_schema
+            detected_schema = detect_schema(normalized_path, content)
             
-            # Auto-generate fileset name if not provided
-            if not fileset_name:
-                fileset_name = generate_fileset_name(file_path)
+            # Merge metadata intelligently
+            if existing_doc and needs_metadata_update:
+                # Merge metadata - prefer new values but keep existing if new is empty
+                final_fileset = fileset_name or existing_doc[3] or generate_fileset_name(normalized_path)
+                final_fileset_desc = fileset_description or existing_doc[4]
+                final_schema = schema_info or existing_doc[5] or detected_schema
                 
+                # Merge tags - combine existing and new tags
+                existing_tags_list = existing_doc[6].split(',') if existing_doc[6] else []
+                new_tags_list = tags if tags else []
+                merged_tags = list(set(existing_tags_list + new_tags_list))  # Remove duplicates
+                merged_tags = [tag.strip() for tag in merged_tags if tag.strip()]  # Clean empty tags
+                final_tags = merged_tags
+                
+                final_user_desc = user_description or existing_doc[7]
+                
+                logger.info(f"Merging metadata for {normalized_path}: "
+                          f"fileset='{final_fileset}', tags={len(final_tags)}")
+            else:
+                # New document or no metadata to merge
+                final_fileset = fileset_name or generate_fileset_name(normalized_path)
+                final_fileset_desc = fileset_description
+                final_schema = schema_info or detected_schema
+                final_tags = tags if tags else []
+                final_user_desc = user_description
+            
             # Convert tags to string
-            tags_str = ','.join(tags) if tags else ''
+            tags_str = ','.join(final_tags) if final_tags else ''
             
-            # Update or create fileset record
-            if fileset_name:
+            # Update or create fileset record (avoid duplicates)
+            if final_fileset:
                 cursor.execute("""
                     INSERT OR REPLACE INTO filesets 
                     (name, description, schema_info, tags, updated_at)
                     VALUES (?, ?, ?, ?, ?)
-                """, (fileset_name, fileset_description, final_schema, tags_str, datetime.now()))
+                """, (final_fileset, final_fileset_desc, final_schema, tags_str, datetime.now()))
             
-            # Insert or update document record with enhanced metadata
-            cursor.execute("""
-                INSERT OR REPLACE INTO documents 
-                (file_path, file_hash, title, content_preview, file_type, file_size, 
-                 fileset_name, fileset_description, schema_info, tags, user_description, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (file_path, file_hash, title, content_preview, file_type, file_size,
-                  fileset_name, fileset_description, final_schema, tags_str, user_description, datetime.now()))
-            
-            document_id = cursor.lastrowid
-            
-            # Update or create fileset record
-            if fileset_name:
+            # Handle document record
+            if existing_doc:
+                # Update existing document
                 cursor.execute("""
-                    INSERT OR REPLACE INTO filesets 
-                    (name, description, schema_info, tags, updated_at)
-                    VALUES (?, ?, ?, ?, ?)
-                """, (fileset_name, fileset_description, final_schema, tags_str, datetime.now()))
-            
-            # Delete existing chunks for this document
-            cursor.execute("DELETE FROM chunks WHERE document_id = ?", (document_id,))
-            
-            # Chunk the content
-            chunks = self._chunk_text(content)
-            
-            # Load model if needed
-            self._load_model()
-            
-            # Generate embeddings and store chunks with enhanced content
-            for i, chunk in enumerate(chunks):
-                embedding_id = f"{document_id}_{i}"
+                    UPDATE documents 
+                    SET file_hash = ?, title = ?, content_preview = ?, file_type = ?, file_size = ?,
+                        fileset_name = ?, fileset_description = ?, schema_info = ?, tags = ?, 
+                        user_description = ?, updated_at = ?
+                    WHERE id = ?
+                """, (file_hash, title, content_preview, file_type, file_size,
+                      final_fileset, final_fileset_desc, final_schema, tags_str, 
+                      final_user_desc, datetime.now(), document_id))
                 
-                # Create enhanced content that includes metadata for better search
-                enhanced_content = self._create_enhanced_content(
-                    chunk, title, fileset_name, fileset_description, tags, user_description, final_schema
-                )
-                
+                logger.info(f"Updated existing document record for {normalized_path}")
+            else:
+                # Insert new document
                 cursor.execute("""
-                    INSERT INTO chunks (document_id, chunk_index, content, enhanced_content, embedding_id)
-                    VALUES (?, ?, ?, ?, ?)
-                """, (document_id, i, chunk, enhanced_content, embedding_id))
+                    INSERT INTO documents 
+                    (file_path, file_hash, title, content_preview, file_type, file_size, 
+                     fileset_name, fileset_description, schema_info, tags, user_description, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (normalized_path, file_hash, title, content_preview, file_type, file_size,
+                      final_fileset, final_fileset_desc, final_schema, tags_str, final_user_desc, datetime.now()))
                 
-                # Generate and cache embedding using enhanced content
-                try:
-                    embedding = self.model.encode([enhanced_content])[0]
+                document_id = cursor.lastrowid
+                logger.info(f"Created new document record for {normalized_path}")
+            
+            # Handle content re-indexing if needed
+            if needs_content_reindex:
+                # Delete existing chunks and embeddings for this document
+                cursor.execute("SELECT embedding_id FROM chunks WHERE document_id = ?", (document_id,))
+                old_embeddings = cursor.fetchall()
+                
+                # Delete old embedding files
+                for (embedding_id,) in old_embeddings:
                     embedding_file = self.embeddings_path / f"{embedding_id}.npy"
-                    np.save(embedding_file, embedding)
-                except Exception as e:
-                    logger.error(f"Error generating embedding for chunk {embedding_id}: {e}")
+                    if embedding_file.exists():
+                        try:
+                            embedding_file.unlink()
+                        except Exception as e:
+                            logger.warning(f"Failed to delete old embedding {embedding_id}: {e}")
+                
+                # Delete old chunks
+                cursor.execute("DELETE FROM chunks WHERE document_id = ?", (document_id,))
+                
+                # Chunk the content
+                chunks = self._chunk_text(content)
+                
+                # Load model if needed
+                self._load_model()
+                
+                # Generate embeddings and store chunks with enhanced content
+                for i, chunk in enumerate(chunks):
+                    embedding_id = f"{document_id}_{i}"
                     
-            # Update document with indexing info and metadata
-            cursor.execute("""
-                UPDATE documents 
-                SET indexed_at = ?, chunk_count = ?, fileset_name = ?, fileset_description = ?, 
-                    schema_info = ?, tags = ?, user_description = ?
-                WHERE id = ?
-            """, (datetime.now(), len(chunks), fileset_name, fileset_description, 
-                  final_schema, tags_str, user_description, document_id))
+                    # Create enhanced content that includes metadata for better search
+                    enhanced_content = self._create_enhanced_content(
+                        chunk, title, final_fileset, final_fileset_desc, final_tags, 
+                        final_user_desc, final_schema
+                    )
+                    
+                    cursor.execute("""
+                        INSERT INTO chunks (document_id, chunk_index, content, enhanced_content, embedding_id)
+                        VALUES (?, ?, ?, ?, ?)
+                    """, (document_id, i, chunk, enhanced_content, embedding_id))
+                    
+                    # Generate and cache embedding using enhanced content
+                    try:
+                        embedding = self.model.encode([enhanced_content])[0]
+                        embedding_file = self.embeddings_path / f"{embedding_id}.npy"
+                        np.save(embedding_file, embedding)
+                    except Exception as e:
+                        logger.error(f"Error generating embedding for chunk {embedding_id}: {e}")
+                        
+                # Update document with indexing info
+                cursor.execute("""
+                    UPDATE documents 
+                    SET indexed_at = ?, chunk_count = ?
+                    WHERE id = ?
+                """, (datetime.now(), len(chunks), document_id))
+                
+                logger.info(f"Re-indexed content for {normalized_path} with {len(chunks)} chunks")
+            else:
+                # Just update metadata in existing chunks if metadata changed
+                if needs_metadata_update and existing_doc:
+                    cursor.execute("SELECT id, chunk_index, content FROM chunks WHERE document_id = ?", (document_id,))
+                    existing_chunks = cursor.fetchall()
+                    
+                    for chunk_id, chunk_index, chunk_content in existing_chunks:
+                        # Update enhanced content with new metadata
+                        enhanced_content = self._create_enhanced_content(
+                            chunk_content, title, final_fileset, final_fileset_desc, 
+                            final_tags, final_user_desc, final_schema
+                        )
+                        
+                        cursor.execute("""
+                            UPDATE chunks SET enhanced_content = ? WHERE id = ?
+                        """, (enhanced_content, chunk_id))
+                        
+                        # Regenerate embedding with updated metadata
+                        try:
+                            embedding_id = f"{document_id}_{chunk_index}"
+                            embedding = self.model.encode([enhanced_content])[0]
+                            embedding_file = self.embeddings_path / f"{embedding_id}.npy"
+                            np.save(embedding_file, embedding)
+                        except Exception as e:
+                            logger.error(f"Error updating embedding for chunk {embedding_id}: {e}")
+                    
+                    logger.info(f"Updated metadata for {len(existing_chunks)} chunks in {normalized_path}")
             
             conn.commit()
             conn.close()
             
-            logger.info(f"Indexed document {file_path} with {len(chunks)} chunks in fileset '{fileset_name}'")
+            action = "re-indexed" if needs_content_reindex else "updated metadata for"
+            logger.info(f"Successfully {action} document {normalized_path} in fileset '{final_fileset}'")
             return True
             
         except Exception as e:
@@ -706,36 +823,20 @@ class VectorSearchEngine:
     def update_document_metadata(self, file_path: str, fileset_name: str = None, 
                                fileset_description: str = None, tags: List[str] = None,
                                user_description: str = None) -> bool:
-        """Update metadata for an existing document"""
+        """Update metadata for an existing document using the main indexing method"""
         try:
-            db_path_str = str(self.vector_db_path.resolve())
-            if not Path(db_path_str).exists():
-                return False
-                
-            conn = sqlite3.connect(db_path_str)
-            cursor = conn.cursor()
+            # Normalize file path
+            if not file_path.startswith("dataset://"):
+                file_path = str(Path(file_path).resolve())
             
-            # Update document metadata
-            tags_str = ','.join(tags) if tags else ''
-            cursor.execute("""
-                UPDATE documents 
-                SET fileset_name = ?, fileset_description = ?, tags = ?, user_description = ?, updated_at = ?
-                WHERE file_path = ?
-            """, (fileset_name, fileset_description, tags_str, user_description, datetime.now(), file_path))
-            
-            # Update fileset if provided
-            if fileset_name:
-                cursor.execute("""
-                    INSERT OR REPLACE INTO filesets 
-                    (name, description, tags, updated_at)
-                    VALUES (?, ?, ?, ?)
-                """, (fileset_name, fileset_description, tags_str, datetime.now()))
-            
-            conn.commit()
-            conn.close()
-            
-            logger.info(f"Updated metadata for document: {file_path}")
-            return True
+            # Use the main index_document method which now handles metadata merging
+            return self.index_document(
+                file_path=file_path,
+                fileset_name=fileset_name,
+                fileset_description=fileset_description,
+                tags=tags,
+                user_description=user_description
+            )
             
         except Exception as e:
             logger.error(f"Error updating document metadata: {e}")
@@ -905,8 +1006,10 @@ class VectorSearchEngine:
             conn = sqlite3.connect(db_path_str)
             cursor = conn.cursor()
             
+            # Clear in proper order to respect foreign key constraints
             cursor.execute("DELETE FROM chunks")
             cursor.execute("DELETE FROM documents")
+            cursor.execute("DELETE FROM filesets")
             cursor.execute("DELETE FROM search_history")
             
             conn.commit()
@@ -920,11 +1023,118 @@ class VectorSearchEngine:
                     except Exception as e:
                         logger.warning(f"Failed to delete embedding file {embedding_file}: {e}")
                         
-            logger.info("Vector search index cleared")
+            logger.info("Vector search index cleared completely")
             
         except Exception as e:
             logger.error(f"Error clearing index: {e}")
             raise
+            
+    def remove_duplicate_documents(self) -> Dict[str, Any]:
+        """Remove duplicate documents based on file paths and merge their metadata"""
+        try:
+            db_path_str = str(self.vector_db_path.resolve())
+            if not Path(db_path_str).exists():
+                return {'removed': 0, 'errors': []}
+                
+            conn = sqlite3.connect(db_path_str)
+            cursor = conn.cursor()
+            
+            # Find duplicate file paths
+            cursor.execute("""
+                SELECT file_path, COUNT(*) as count, GROUP_CONCAT(id) as ids
+                FROM documents 
+                GROUP BY file_path 
+                HAVING COUNT(*) > 1
+            """)
+            
+            duplicates = cursor.fetchall()
+            removed_count = 0
+            errors = []
+            
+            for file_path, count, ids_str in duplicates:
+                try:
+                    ids = [int(id_str) for id_str in ids_str.split(',')]
+                    
+                    # Get all duplicate records
+                    cursor.execute("""
+                        SELECT id, fileset_name, fileset_description, schema_info, tags, 
+                               user_description, indexed_at, chunk_count
+                        FROM documents WHERE id IN ({})
+                        ORDER BY updated_at DESC
+                    """.format(','.join('?' * len(ids))), ids)
+                    
+                    records = cursor.fetchall()
+                    
+                    # Keep the most recently updated record (first in list)
+                    keep_record = records[0]
+                    keep_id = keep_record[0]
+                    
+                    # Merge metadata from all records
+                    merged_fileset = None
+                    merged_description = None
+                    merged_schema = None
+                    merged_tags = set()
+                    merged_user_desc = None
+                    
+                    for record in records:
+                        if record[1] and not merged_fileset:  # fileset_name
+                            merged_fileset = record[1]
+                        if record[2] and not merged_description:  # fileset_description
+                            merged_description = record[2]
+                        if record[3] and not merged_schema:  # schema_info
+                            merged_schema = record[3]
+                        if record[4]:  # tags
+                            merged_tags.update(record[4].split(','))
+                        if record[5] and not merged_user_desc:  # user_description
+                            merged_user_desc = record[5]
+                    
+                    # Clean and merge tags
+                    merged_tags = [tag.strip() for tag in merged_tags if tag.strip()]
+                    merged_tags_str = ','.join(merged_tags)
+                    
+                    # Update the kept record with merged metadata
+                    cursor.execute("""
+                        UPDATE documents 
+                        SET fileset_name = ?, fileset_description = ?, schema_info = ?, 
+                            tags = ?, user_description = ?, updated_at = ?
+                        WHERE id = ?
+                    """, (merged_fileset, merged_description, merged_schema, 
+                          merged_tags_str, merged_user_desc, datetime.now(), keep_id))
+                    
+                    # Remove duplicate records (except the one we're keeping)
+                    remove_ids = [record[0] for record in records[1:]]
+                    
+                    for remove_id in remove_ids:
+                        # Delete chunks and embeddings for duplicate records
+                        cursor.execute("SELECT embedding_id FROM chunks WHERE document_id = ?", (remove_id,))
+                        embeddings = cursor.fetchall()
+                        
+                        for (embedding_id,) in embeddings:
+                            embedding_file = self.embeddings_path / f"{embedding_id}.npy"
+                            if embedding_file.exists():
+                                embedding_file.unlink()
+                        
+                        cursor.execute("DELETE FROM chunks WHERE document_id = ?", (remove_id,))
+                        cursor.execute("DELETE FROM documents WHERE id = ?", (remove_id,))
+                        
+                        removed_count += 1
+                    
+                    logger.info(f"Merged {count} duplicates for {file_path}, kept record {keep_id}")
+                    
+                except Exception as e:
+                    error_msg = f"Error processing duplicates for {file_path}: {str(e)}"
+                    errors.append(error_msg)
+                    logger.error(error_msg)
+            
+            conn.commit()
+            conn.close()
+            
+            logger.info(f"Removed {removed_count} duplicate documents")
+            return {'removed': removed_count, 'errors': errors}
+            
+        except Exception as e:
+            logger.error(f"Error removing duplicates: {e}")
+            return {'removed': 0, 'errors': [str(e)]}
             
     def rebuild_index(self, directories: List[str]) -> Dict[str, Any]:
         """Rebuild the entire vector search index"""

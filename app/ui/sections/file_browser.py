@@ -878,7 +878,7 @@ class FileBrowser(QWidget):
             
                 
     def auto_index_file(self, file_info: Dict[str, Any]):
-        """Automatically index new file to vector database"""
+        """Automatically index new file to vector database with duplicate prevention"""
         if not self.vector_engine:
             return
             
@@ -891,35 +891,30 @@ class FileBrowser(QWidget):
             
             if file_ext not in supported_formats:
                 return
-                
-            # Check if already indexed
-            indexed_docs = self.vector_engine.get_indexed_documents()
-            already_indexed = any(doc['file_path'] == file_path for doc in indexed_docs)
             
-            if not already_indexed:
-                # Get metadata for the file
-                metadata = self.metadata_manager.get_file_metadata(file_path)
-                
-                # Determine fileset name from directory
-                directory_name = Path(file_path).parent.name
-                fileset_name = metadata.get('category') or directory_name
-                
-                # Index the file
-                success = self.vector_engine.index_document(
-                    file_path,
-                    fileset_name=fileset_name,
-                    fileset_description=metadata.get('description', ''),
-                    tags=metadata.get('tags', []),
-                    user_description=metadata.get('description', '')
-                )
-                
-                if success:
-                    logger.info(f"Auto-indexed file: {file_path}")
-                    # Update metadata to mark as indexed
-                    metadata['indexed_for_vector_search'] = True
-                    self.metadata_manager.set_file_metadata(file_path, metadata)
-                else:
-                    logger.warning(f"Failed to auto-index file: {file_path}")
+            # Get metadata for the file
+            metadata = self.metadata_manager.get_file_metadata(file_path)
+            
+            # Determine fileset name from directory
+            directory_name = Path(file_path).parent.name
+            fileset_name = metadata.get('category') or directory_name
+            
+            # Index the file (the vector engine now handles duplicates automatically)
+            success = self.vector_engine.index_document(
+                file_path,
+                fileset_name=fileset_name,
+                fileset_description=metadata.get('description', ''),
+                tags=metadata.get('tags', []),
+                user_description=metadata.get('description', '')
+            )
+            
+            if success:
+                logger.info(f"Auto-indexed file: {file_path}")
+                # Update metadata to mark as indexed
+                metadata['indexed_for_vector_search'] = True
+                self.metadata_manager.set_file_metadata(file_path, metadata)
+            else:
+                logger.warning(f"Failed to auto-index file: {file_path}")
                     
         except Exception as e:
             logger.error(f"Error auto-indexing file {file_info.get('path', 'Unknown')}: {e}")

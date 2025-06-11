@@ -533,7 +533,7 @@ class DatasetBrowser(QWidget):
             )
             
     def auto_index_datasets(self, datasets):
-        """Automatically index new datasets to vector database"""
+        """Automatically index new datasets to vector database with duplicate prevention"""
         if not self.vector_engine:
             return
             
@@ -542,18 +542,13 @@ class DatasetBrowser(QWidget):
                 # Create virtual document for dataset
                 dataset_id = f"dataset://{dataset['name']}"
                 
-                # Check if already indexed
-                indexed_docs = self.vector_engine.get_indexed_documents()
-                already_indexed = any(doc['file_path'] == dataset_id for doc in indexed_docs)
-                
-                if not already_indexed:
-                    # Index the dataset as a virtual document
-                    success = self.vector_engine.index_document(
-                        dataset_id,
-                        fileset_name=dataset['name'],
-                        fileset_description=dataset.get('description', ''),
-                        tags=dataset.get('tags', []),
-                        user_description=f"""
+                # Index the dataset as a virtual document (vector engine handles duplicates)
+                success = self.vector_engine.index_document(
+                    dataset_id,
+                    fileset_name=dataset['name'],
+                    fileset_description=dataset.get('description', ''),
+                    tags=dataset.get('tags', []),
+                    user_description=f"""
 Dataset: {dataset['name']}
 Type: {dataset.get('type', 'Unknown')}
 Description: {dataset.get('description', '')}
@@ -561,13 +556,13 @@ Owner: {dataset.get('owner', 'Unknown')}
 Source: {dataset.get('source', '')}
 Access Level: {dataset.get('access_level', 'Unknown')}
 Row Count: {dataset.get('row_count', 'Unknown')}
-                        """.strip()
-                    )
-                    
-                    if success:
-                        logger.info(f"Auto-indexed dataset: {dataset['name']}")
-                    else:
-                        logger.warning(f"Failed to auto-index dataset: {dataset['name']}")
+                    """.strip()
+                )
+                
+                if success:
+                    logger.info(f"Auto-indexed dataset: {dataset['name']}")
+                else:
+                    logger.warning(f"Failed to auto-index dataset: {dataset['name']}")
                         
             except Exception as e:
                 logger.error(f"Error auto-indexing dataset {dataset.get('name', 'Unknown')}: {e}")
