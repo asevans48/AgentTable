@@ -339,9 +339,17 @@ class SearchWorker(QThread):
                     summary_parts.append(content)
                     enhanced_summary = '\n'.join(summary_parts)
                     
-                    # Add similarity score to summary
+                    # Add enhanced scoring information to summary
                     similarity_score = result.get('similarity', 0.0)
-                    enhanced_summary += f"\n\n🎯 Similarity: {similarity_score:.3f}"
+                    enhanced_summary += f"\n\n🎯 Overall Score: {similarity_score:.3f}"
+                    
+                    # Show component scores if available
+                    if 'vector_score' in result:
+                        enhanced_summary += f"\n📊 Vector: {result['vector_score']:.3f}"
+                    if 'keyword_score' in result:
+                        enhanced_summary += f" | Keyword: {result['keyword_score']:.3f}"
+                    if 'metadata_score' in result:
+                        enhanced_summary += f" | Metadata: {result['metadata_score']:.3f}"
                     
                     # Determine if this is a dataset or file
                     is_dataset = result.get('file_path', '').startswith('dataset://')

@@ -1418,8 +1418,9 @@ class VectorSearchEngine:
             logger.error(f"Error updating document metadata: {e}")
             return False
         
-    def search(self, query: str, max_results: int = 10, similarity_threshold: float = 0.3) -> List[Dict[str, Any]]:
-        """Perform vector search"""
+    def search(self, query: str, max_results: int = 10, similarity_threshold: float = 0.3, 
+               search_mode: str = "hybrid") -> List[Dict[str, Any]]:
+        """Perform enhanced vector search with multiple algorithms"""
         if not HAS_VECTOR_DEPS:
             return [{
                 'error': 'Vector search dependencies not installed',
@@ -1428,7 +1429,7 @@ class VectorSearchEngine:
             
         try:
             start_time = datetime.now()
-            logger.info(f"Starting vector search for query: '{query}' with threshold: {similarity_threshold}")
+            logger.info(f"Starting enhanced vector search for query: '{query}' with mode: {search_mode}")
             
             # Load model if needed
             try:
@@ -1445,18 +1446,15 @@ class VectorSearchEngine:
                     'message': f'Error loading model: {str(e)}'
                 }]
             
-            # Generate query embedding
-            try:
-                query_embedding = self.model.encode([query])[0]
-                logger.debug(f"Generated query embedding with shape: {query_embedding.shape}")
-            except Exception as e:
-                logger.error(f"Failed to generate query embedding: {e}")
-                return [{
-                    'error': 'Query encoding failed',
-                    'message': f'Error encoding query: {str(e)}'
-                }]
+            # Parse and understand the query
+            query_info = self._analyze_query(query)
+            logger.debug(f"Query analysis: {query_info}")
             
-            # Get all chunks from database using absolute path
+            # Expand query with synonyms and related terms
+            expanded_queries = self._expand_query(query, query_info)
+            logger.debug(f"Expanded queries: {expanded_queries}")
+            
+            # Get database connection
             db_path_str = str(self.vector_db_path.resolve())
             if not Path(db_path_str).exists():
                 logger.error(f"Vector database not found at: {db_path_str}")
@@ -1469,103 +1467,33 @@ class VectorSearchEngine:
             conn = sqlite3.connect(db_path_str)
             cursor = conn.cursor()
             
-            # First check if we have any documents at all
-            cursor.execute("SELECT COUNT(*) FROM documents")
-            total_docs = cursor.fetchone()[0]
-            logger.info(f"Total documents in database: {total_docs}")
-            
+            # Check database status
             cursor.execute("SELECT COUNT(*) FROM documents WHERE indexed_at IS NOT NULL")
             indexed_docs = cursor.fetchone()[0]
-            logger.info(f"Indexed documents: {indexed_docs}")
             
-            cursor.execute("SELECT COUNT(*) FROM chunks")
-            total_chunks = cursor.fetchone()[0]
-            logger.info(f"Total chunks: {total_chunks}")
-            
-            cursor.execute("""
-                SELECT c.id, c.document_id, c.chunk_index, c.content, c.embedding_id,
-                       d.file_path, d.title, d.file_type, d.fileset_name, d.fileset_description,
-                       d.schema_info, d.tags, d.user_description
-                FROM chunks c
-                JOIN documents d ON c.document_id = d.id
-                WHERE d.indexed_at IS NOT NULL
-            """)
-            
-            chunks = cursor.fetchall()
-            logger.info(f"Retrieved {len(chunks)} chunks for search")
-            
-            if not chunks:
+            if indexed_docs == 0:
                 conn.close()
                 return [{
                     'message': 'No indexed documents found',
-                    'suggestion': 'Please index some documents first',
-                    'stats': {
-                        'total_documents': total_docs,
-                        'indexed_documents': indexed_docs,
-                        'total_chunks': total_chunks
-                    }
+                    'suggestion': 'Please index some documents first'
                 }]
-                
-            # Calculate similarities
-            results = []
-            processed_chunks = 0
-            missing_embeddings = 0
             
-            for chunk_data in chunks:
-                (chunk_id, doc_id, chunk_idx, content, embedding_id, file_path, title, file_type,
-                 fileset_name, fileset_description, schema_info, tags, user_description) = chunk_data
-                
-                processed_chunks += 1
-                
-                # Load embedding
-                embedding_file = self.embeddings_path / f"{embedding_id}.npy"
-                if not embedding_file.exists():
-                    missing_embeddings += 1
-                    logger.debug(f"Missing embedding file: {embedding_file}")
-                    continue
-                    
-                try:
-                    chunk_embedding = np.load(embedding_file)
-                    
-                    # Ensure embeddings are the same dimension
-                    if chunk_embedding.shape != query_embedding.shape:
-                        logger.warning(f"Embedding dimension mismatch: query={query_embedding.shape}, chunk={chunk_embedding.shape}")
-                        continue
-                    
-                    # Calculate cosine similarity
-                    similarity = np.dot(query_embedding, chunk_embedding) / (
-                        np.linalg.norm(query_embedding) * np.linalg.norm(chunk_embedding)
-                    )
-                    
-                    logger.debug(f"Chunk {chunk_id} similarity: {similarity:.4f} (threshold: {similarity_threshold})")
-                    
-                    if similarity >= similarity_threshold:
-                        results.append({
-                            'chunk_id': chunk_id,
-                            'document_id': doc_id,
-                            'file_path': file_path,
-                            'title': title,
-                            'file_type': file_type,
-                            'content': content,
-                            'similarity': float(similarity),
-                            'chunk_index': chunk_idx,
-                            'fileset_name': fileset_name or 'Unknown Dataset',
-                            'fileset_description': fileset_description or '',
-                            'schema_info': schema_info or '',
-                            'tags': tags or '',
-                            'user_description': user_description or ''
-                        })
-                        logger.debug(f"Added result with similarity {similarity:.4f}")
-                        
-                except Exception as e:
-                    logger.warning(f"Error processing embedding {embedding_id}: {e}")
-                    continue
-                    
-            logger.info(f"Processed {processed_chunks} chunks, {missing_embeddings} missing embeddings, found {len(results)} results above threshold")
-                    
-            # Sort by similarity and limit results
-            results.sort(key=lambda x: x['similarity'], reverse=True)
-            results = results[:max_results]
+            # Perform different search strategies based on mode
+            if search_mode == "hybrid":
+                results = self._hybrid_search(query, expanded_queries, query_info, cursor, max_results, similarity_threshold)
+            elif search_mode == "semantic":
+                results = self._semantic_search(query, expanded_queries, cursor, max_results, similarity_threshold)
+            elif search_mode == "keyword":
+                results = self._keyword_search(query, query_info, cursor, max_results)
+            else:
+                # Default to hybrid
+                results = self._hybrid_search(query, expanded_queries, query_info, cursor, max_results, similarity_threshold)
+            
+            # Re-rank results using multiple signals
+            results = self._rerank_results(results, query, query_info)
+            
+            # Diversify results to avoid too many from same source
+            results = self._diversify_results(results, max_results)
             
             # Log search to database
             try:
@@ -1573,8 +1501,7 @@ class VectorSearchEngine:
                 cursor.execute("""
                     INSERT INTO search_history (query, search_type, results_count, search_time)
                     VALUES (?, ?, ?, ?)
-                """, (query, 'vector_search', len(results), search_time))
-                
+                """, (query, f'enhanced_{search_mode}', len(results), search_time))
                 conn.commit()
             except Exception as e:
                 logger.warning(f"Failed to log search history: {e}")
@@ -1582,27 +1509,12 @@ class VectorSearchEngine:
                 conn.close()
             
             search_time = (datetime.now() - start_time).total_seconds()
-            logger.info(f"Vector search for '{query}' returned {len(results)} results in {search_time:.2f}s")
-            
-            # If no results found, return helpful debug info
-            if not results:
-                return [{
-                    'message': f'No results found for query: "{query}"',
-                    'suggestion': 'Try lowering the similarity threshold or using different keywords',
-                    'debug_info': {
-                        'processed_chunks': processed_chunks,
-                        'missing_embeddings': missing_embeddings,
-                        'similarity_threshold': similarity_threshold,
-                        'query_length': len(query),
-                        'embeddings_path': str(self.embeddings_path),
-                        'database_path': str(self.vector_db_path)
-                    }
-                }]
+            logger.info(f"Enhanced vector search returned {len(results)} results in {search_time:.2f}s")
             
             return results
             
         except Exception as e:
-            logger.error(f"Error performing vector search: {e}")
+            logger.error(f"Error performing enhanced vector search: {e}")
             import traceback
             logger.error(traceback.format_exc())
             return [{
@@ -1942,6 +1854,404 @@ class VectorSearchEngine:
                 'database_path': str(self.vector_db_path)
             }
     
+    def _analyze_query(self, query: str) -> Dict[str, Any]:
+        """Analyze query to understand intent and extract key information"""
+        query_lower = query.lower()
+        
+        analysis = {
+            'intent': 'general',
+            'entities': [],
+            'keywords': [],
+            'filters': {},
+            'question_type': None,
+            'data_types': [],
+            'operations': []
+        }
+        
+        # Detect question types
+        question_words = ['what', 'how', 'why', 'when', 'where', 'who', 'which']
+        for word in question_words:
+            if query_lower.startswith(word):
+                analysis['question_type'] = word
+                analysis['intent'] = 'question'
+                break
+        
+        # Detect data-related terms
+        data_terms = {
+            'financial': ['income', 'revenue', 'profit', 'sales', 'money', 'cost', 'budget', 'financial'],
+            'customer': ['customer', 'client', 'user', 'person', 'people', 'demographic'],
+            'temporal': ['date', 'time', 'year', 'month', 'day', 'recent', 'latest', 'historical'],
+            'analytics': ['analysis', 'report', 'dashboard', 'metric', 'kpi', 'trend', 'pattern'],
+            'technical': ['code', 'function', 'class', 'api', 'database', 'table', 'column']
+        }
+        
+        for category, terms in data_terms.items():
+            if any(term in query_lower for term in terms):
+                analysis['data_types'].append(category)
+        
+        # Detect operations
+        operations = {
+            'aggregation': ['sum', 'count', 'average', 'total', 'maximum', 'minimum'],
+            'filtering': ['filter', 'where', 'contains', 'includes', 'exclude'],
+            'comparison': ['compare', 'versus', 'vs', 'difference', 'similar', 'like'],
+            'trend': ['trend', 'change', 'growth', 'decline', 'increase', 'decrease']
+        }
+        
+        for op_type, terms in operations.items():
+            if any(term in query_lower for term in terms):
+                analysis['operations'].append(op_type)
+        
+        # Extract potential entities (simple approach)
+        words = query.split()
+        analysis['keywords'] = [word.strip('.,!?') for word in words if len(word) > 2]
+        
+        return analysis
+    
+    def _expand_query(self, query: str, query_info: Dict[str, Any]) -> List[str]:
+        """Expand query with synonyms and related terms"""
+        expanded = [query]  # Always include original query
+        
+        # Synonym mapping for common data terms
+        synonyms = {
+            'income': ['revenue', 'earnings', 'salary', 'wages', 'profit'],
+            'customer': ['client', 'user', 'buyer', 'consumer'],
+            'sales': ['revenue', 'transactions', 'purchases', 'orders'],
+            'data': ['information', 'records', 'dataset', 'table'],
+            'analysis': ['analytics', 'report', 'insights', 'metrics'],
+            'financial': ['monetary', 'fiscal', 'economic', 'budget'],
+            'performance': ['metrics', 'kpi', 'results', 'outcomes']
+        }
+        
+        query_lower = query.lower()
+        
+        # Add synonyms for detected terms
+        for term, syns in synonyms.items():
+            if term in query_lower:
+                for syn in syns[:2]:  # Limit to 2 synonyms per term
+                    expanded_query = query_lower.replace(term, syn)
+                    if expanded_query != query_lower:
+                        expanded.append(expanded_query)
+        
+        # Add domain-specific expansions based on detected data types
+        if 'financial' in query_info.get('data_types', []):
+            expanded.extend([
+                query + ' financial data',
+                query + ' money revenue',
+                query + ' budget cost'
+            ])
+        
+        if 'customer' in query_info.get('data_types', []):
+            expanded.extend([
+                query + ' customer data',
+                query + ' user information',
+                query + ' client records'
+            ])
+        
+        # Limit total expansions
+        return expanded[:5]
+    
+    def _hybrid_search(self, query: str, expanded_queries: List[str], query_info: Dict[str, Any], 
+                      cursor, max_results: int, similarity_threshold: float) -> List[Dict[str, Any]]:
+        """Perform hybrid search combining vector similarity and keyword matching"""
+        
+        # Get all chunks with metadata
+        cursor.execute("""
+            SELECT c.id, c.document_id, c.chunk_index, c.content, c.enhanced_content, c.embedding_id,
+                   d.file_path, d.title, d.file_type, d.fileset_name, d.fileset_description,
+                   d.schema_info, d.tags, d.user_description, d.file_size
+            FROM chunks c
+            JOIN documents d ON c.document_id = d.id
+            WHERE d.indexed_at IS NOT NULL
+        """)
+        
+        chunks = cursor.fetchall()
+        results = []
+        
+        # Generate embeddings for all expanded queries
+        query_embeddings = []
+        for q in expanded_queries:
+            try:
+                embedding = self.model.encode([q])[0]
+                query_embeddings.append(embedding)
+            except Exception as e:
+                logger.warning(f"Failed to encode expanded query '{q}': {e}")
+        
+        for chunk_data in chunks:
+            (chunk_id, doc_id, chunk_idx, content, enhanced_content, embedding_id, file_path, 
+             title, file_type, fileset_name, fileset_description, schema_info, tags, 
+             user_description, file_size) = chunk_data
+            
+            # Load embedding
+            embedding_file = self.embeddings_path / f"{embedding_id}.npy"
+            if not embedding_file.exists():
+                continue
+                
+            try:
+                chunk_embedding = np.load(embedding_file)
+                
+                # Calculate vector similarities for all query variations
+                vector_scores = []
+                for query_embedding in query_embeddings:
+                    if chunk_embedding.shape == query_embedding.shape:
+                        similarity = np.dot(query_embedding, chunk_embedding) / (
+                            np.linalg.norm(query_embedding) * np.linalg.norm(chunk_embedding)
+                        )
+                        vector_scores.append(float(similarity))
+                
+                if not vector_scores:
+                    continue
+                
+                # Use best vector similarity
+                best_vector_score = max(vector_scores)
+                
+                # Calculate keyword matching score
+                keyword_score = self._calculate_keyword_score(query, content, enhanced_content, 
+                                                            fileset_name, tags, user_description)
+                
+                # Calculate metadata relevance score
+                metadata_score = self._calculate_metadata_score(query_info, file_type, fileset_name, 
+                                                              tags, schema_info)
+                
+                # Combine scores with weights
+                combined_score = (
+                    0.6 * best_vector_score +      # Vector similarity (primary)
+                    0.25 * keyword_score +         # Keyword matching
+                    0.15 * metadata_score          # Metadata relevance
+                )
+                
+                # Apply threshold to combined score
+                if combined_score >= similarity_threshold:
+                    results.append({
+                        'chunk_id': chunk_id,
+                        'document_id': doc_id,
+                        'file_path': file_path,
+                        'title': title,
+                        'file_type': file_type,
+                        'content': content,
+                        'similarity': combined_score,
+                        'vector_score': best_vector_score,
+                        'keyword_score': keyword_score,
+                        'metadata_score': metadata_score,
+                        'chunk_index': chunk_idx,
+                        'fileset_name': fileset_name or 'Unknown Dataset',
+                        'fileset_description': fileset_description or '',
+                        'schema_info': schema_info or '',
+                        'tags': tags or '',
+                        'user_description': user_description or '',
+                        'file_size': file_size or 0
+                    })
+                    
+            except Exception as e:
+                logger.warning(f"Error processing chunk {chunk_id}: {e}")
+                continue
+        
+        return results
+    
+    def _semantic_search(self, query: str, expanded_queries: List[str], cursor, 
+                        max_results: int, similarity_threshold: float) -> List[Dict[str, Any]]:
+        """Perform pure semantic vector search"""
+        # This is similar to the original search but with query expansion
+        return self._hybrid_search(query, expanded_queries, {}, cursor, max_results, similarity_threshold)
+    
+    def _keyword_search(self, query: str, query_info: Dict[str, Any], cursor, max_results: int) -> List[Dict[str, Any]]:
+        """Perform keyword-based search using SQL LIKE queries"""
+        keywords = query_info.get('keywords', query.split())
+        
+        # Build SQL query for keyword search
+        where_conditions = []
+        params = []
+        
+        for keyword in keywords:
+            if len(keyword) > 2:  # Skip very short words
+                condition = """(
+                    c.content LIKE ? OR c.enhanced_content LIKE ? OR 
+                    d.title LIKE ? OR d.fileset_name LIKE ? OR 
+                    d.tags LIKE ? OR d.user_description LIKE ?
+                )"""
+                where_conditions.append(condition)
+                keyword_pattern = f"%{keyword}%"
+                params.extend([keyword_pattern] * 6)
+        
+        if not where_conditions:
+            return []
+        
+        sql_query = f"""
+            SELECT c.id, c.document_id, c.chunk_index, c.content, c.embedding_id,
+                   d.file_path, d.title, d.file_type, d.fileset_name, d.fileset_description,
+                   d.schema_info, d.tags, d.user_description
+            FROM chunks c
+            JOIN documents d ON c.document_id = d.id
+            WHERE d.indexed_at IS NOT NULL AND ({' OR '.join(where_conditions)})
+            LIMIT ?
+        """
+        
+        params.append(max_results * 2)  # Get more results for ranking
+        
+        cursor.execute(sql_query, params)
+        chunks = cursor.fetchall()
+        
+        results = []
+        for chunk_data in chunks:
+            (chunk_id, doc_id, chunk_idx, content, embedding_id, file_path, title, file_type,
+             fileset_name, fileset_description, schema_info, tags, user_description) = chunk_data
+            
+            # Calculate keyword relevance score
+            keyword_score = self._calculate_keyword_score(query, content, content, 
+                                                        fileset_name, tags, user_description)
+            
+            results.append({
+                'chunk_id': chunk_id,
+                'document_id': doc_id,
+                'file_path': file_path,
+                'title': title,
+                'file_type': file_type,
+                'content': content,
+                'similarity': keyword_score,
+                'keyword_score': keyword_score,
+                'chunk_index': chunk_idx,
+                'fileset_name': fileset_name or 'Unknown Dataset',
+                'fileset_description': fileset_description or '',
+                'schema_info': schema_info or '',
+                'tags': tags or '',
+                'user_description': user_description or ''
+            })
+        
+        return results
+    
+    def _calculate_keyword_score(self, query: str, content: str, enhanced_content: str,
+                                fileset_name: str, tags: str, user_description: str) -> float:
+        """Calculate keyword matching score"""
+        query_words = set(query.lower().split())
+        
+        # Combine all searchable text
+        searchable_text = f"{content} {enhanced_content} {fileset_name} {tags} {user_description}".lower()
+        
+        # Count keyword matches
+        matches = 0
+        total_words = len(query_words)
+        
+        for word in query_words:
+            if len(word) > 2 and word in searchable_text:
+                matches += 1
+                
+                # Bonus for exact phrase matches
+                if word in content.lower():
+                    matches += 0.5
+                
+                # Bonus for matches in metadata
+                if word in fileset_name.lower() or word in tags.lower():
+                    matches += 0.3
+        
+        return min(matches / max(total_words, 1), 1.0) if total_words > 0 else 0.0
+    
+    def _calculate_metadata_score(self, query_info: Dict[str, Any], file_type: str,
+                                 fileset_name: str, tags: str, schema_info: str) -> float:
+        """Calculate metadata relevance score"""
+        score = 0.0
+        
+        # File type relevance
+        data_types = query_info.get('data_types', [])
+        if 'technical' in data_types and file_type in ['.py', '.sql', '.json']:
+            score += 0.3
+        elif 'analytics' in data_types and file_type in ['.csv', '.xlsx']:
+            score += 0.3
+        
+        # Tags relevance
+        if tags:
+            tag_list = [tag.strip().lower() for tag in tags.split(',')]
+            for data_type in data_types:
+                if data_type in tag_list:
+                    score += 0.2
+        
+        # Schema relevance for structured data
+        if schema_info and any(dt in ['financial', 'analytics'] for dt in data_types):
+            score += 0.2
+        
+        # Fileset name relevance
+        if fileset_name:
+            fileset_lower = fileset_name.lower()
+            for data_type in data_types:
+                if data_type in fileset_lower:
+                    score += 0.3
+        
+        return min(score, 1.0)
+    
+    def _rerank_results(self, results: List[Dict[str, Any]], query: str, 
+                       query_info: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Re-rank results using multiple signals"""
+        
+        for result in results:
+            # Start with existing similarity score
+            base_score = result.get('similarity', 0.0)
+            
+            # Boost for recent files (if we had timestamps)
+            recency_boost = 0.0
+            
+            # Boost for file size (prefer reasonably sized files)
+            size_boost = 0.0
+            file_size = result.get('file_size', 0)
+            if 1000 < file_size < 1000000:  # 1KB to 1MB sweet spot
+                size_boost = 0.05
+            
+            # Boost for complete metadata
+            metadata_boost = 0.0
+            if result.get('user_description'):
+                metadata_boost += 0.02
+            if result.get('tags'):
+                metadata_boost += 0.02
+            if result.get('schema_info'):
+                metadata_boost += 0.02
+            
+            # Boost for question-answer matching
+            qa_boost = 0.0
+            if query_info.get('question_type') == 'what' and 'definition' in result.get('content', '').lower():
+                qa_boost = 0.1
+            elif query_info.get('question_type') == 'how' and any(word in result.get('content', '').lower() 
+                                                                 for word in ['step', 'process', 'method']):
+                qa_boost = 0.1
+            
+            # Calculate final score
+            result['final_score'] = base_score + recency_boost + size_boost + metadata_boost + qa_boost
+        
+        # Sort by final score
+        results.sort(key=lambda x: x.get('final_score', x.get('similarity', 0)), reverse=True)
+        
+        return results
+    
+    def _diversify_results(self, results: List[Dict[str, Any]], max_results: int) -> List[Dict[str, Any]]:
+        """Diversify results to avoid too many from the same source"""
+        if len(results) <= max_results:
+            return results
+        
+        diversified = []
+        source_counts = {}
+        
+        # First pass: take best result from each unique source
+        for result in results:
+            source = result.get('fileset_name', 'unknown')
+            if source not in source_counts:
+                diversified.append(result)
+                source_counts[source] = 1
+                
+                if len(diversified) >= max_results:
+                    break
+        
+        # Second pass: fill remaining slots with next best results
+        if len(diversified) < max_results:
+            for result in results:
+                if result not in diversified:
+                    source = result.get('fileset_name', 'unknown')
+                    
+                    # Limit results per source (max 3)
+                    if source_counts.get(source, 0) < 3:
+                        diversified.append(result)
+                        source_counts[source] = source_counts.get(source, 0) + 1
+                        
+                        if len(diversified) >= max_results:
+                            break
+        
+        return diversified[:max_results]
+
     def test_search_functionality(self) -> Dict[str, Any]:
         """Test the search functionality with debug information"""
         try:

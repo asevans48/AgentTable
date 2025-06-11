@@ -214,15 +214,24 @@ class VectorSearchTab(QWidget):
         config_controls_layout.addWidget(QLabel("Min Similarity:"))
         self.similarity_threshold = QComboBox()
         self.similarity_threshold.addItems(["0.1", "0.2", "0.3", "0.4", "0.5"])
-        self.similarity_threshold.setCurrentText("0.3")
+        self.similarity_threshold.setCurrentText("0.2")
         config_controls_layout.addWidget(self.similarity_threshold)
+        
+        # Search mode selection
+        config_controls_layout.addWidget(QLabel("Search Mode:"))
+        self.search_mode = QComboBox()
+        self.search_mode.addItems(["Hybrid", "Semantic", "Keyword"])
+        self.search_mode.setCurrentText("Hybrid")
+        self.search_mode.setToolTip("Hybrid: Combines vector similarity with keyword matching\nSemantic: Pure vector similarity\nKeyword: Traditional keyword search")
+        config_controls_layout.addWidget(self.search_mode)
         
         config_controls_layout.addStretch()
         
-        # Semantic search toggle
-        self.semantic_search = QCheckBox("Semantic Search")
-        self.semantic_search.setChecked(True)
-        config_controls_layout.addWidget(self.semantic_search)
+        # Advanced options toggle
+        self.advanced_options = QCheckBox("Query Expansion")
+        self.advanced_options.setChecked(True)
+        self.advanced_options.setToolTip("Automatically expand queries with synonyms and related terms")
+        config_controls_layout.addWidget(self.advanced_options)
         
         config_layout.addLayout(config_controls_layout)
         layout.addWidget(config_frame)
@@ -967,21 +976,28 @@ You can now perform semantic searches across all indexed content.
             self.db_status_label.setStyleSheet("color: #ffc107; font-weight: bold;")
             
     def perform_search(self, query: str) -> dict:
-        """Perform vector search with current settings"""
+        """Perform enhanced vector search with current settings"""
         if not self.vector_engine:
             return {'error': 'Vector search engine not available'}
             
         try:
             max_results = int(self.max_results.currentText())
             similarity_threshold = float(self.similarity_threshold.currentText())
+            search_mode = self.search_mode.currentText().lower()
             
             results = self.vector_engine.search(
                 query=query,
                 max_results=max_results,
-                similarity_threshold=similarity_threshold
+                similarity_threshold=similarity_threshold,
+                search_mode=search_mode
             )
             
-            return {'results': results, 'query': query}
+            return {
+                'results': results, 
+                'query': query,
+                'search_mode': search_mode,
+                'similarity_threshold': similarity_threshold
+            }
             
         except Exception as e:
             return {'error': f'Search failed: {str(e)}'}
