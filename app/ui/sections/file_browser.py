@@ -629,7 +629,23 @@ class FileBrowser(QWidget):
         """Navigate to a specific directory"""
         self.current_directory = directory_path
         self.update_breadcrumb(directory_path)
+        
+        # Clear current file display
+        self.file_model.clear()
+        self.file_model.setHorizontalHeaderLabels(['Name', 'Type', 'Size', 'Tags'])
+        self.file_list.clear()
+        
+        # Filter and display files for the selected directory
         self.apply_filters()
+        
+        # Update status
+        if directory_path:
+            dir_name = Path(directory_path).name
+            file_count = len([f for f in self.indexed_files if f['path'].startswith(directory_path)])
+            self.status_label.setText(f"Showing {file_count} files in {dir_name}")
+        else:
+            total_files = len(self.indexed_files)
+            self.status_label.setText(f"Showing {total_files} files in all watched directories")
         
     def setup_connections(self):
         """Setup signal-slot connections"""
@@ -916,9 +932,11 @@ class FileBrowser(QWidget):
         
     def passes_filter(self, file_info: Dict[str, Any]) -> bool:
         """Check if file passes current filters"""
-        # Directory filter
+        # Directory filter - show files in the selected directory
         if self.current_directory:
-            if not file_info['path'].startswith(self.current_directory):
+            file_dir = str(Path(file_info['path']).parent)
+            # Check if file is directly in the selected directory (not subdirectories)
+            if file_dir != self.current_directory:
                 return False
         
         # Text filter
@@ -1019,6 +1037,8 @@ class FileBrowser(QWidget):
             directory_path = item.data(Qt.ItemDataRole.UserRole)
             if directory_path:
                 self.navigate_to_directory(directory_path)
+                # Force refresh to show files in the selected directory
+                self.apply_filters()
                 
     def on_directory_changed(self, path: str):
         """Handle directory changes from file watcher"""

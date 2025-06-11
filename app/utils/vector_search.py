@@ -309,10 +309,20 @@ class VectorSearchEngine:
             
     def _extract_text_content(self, file_path: str) -> str:
         """Extract text content from various file types with size limits"""
+        file_path_str = str(file_path)
+        
+        # Handle virtual dataset documents
+        if file_path_str.startswith("dataset://"):
+            return file_path_str  # Return as-is for virtual documents
+        
         file_path = Path(file_path)
         content = ""
         
         try:
+            # Check if file exists (skip for virtual documents)
+            if not file_path.exists():
+                return f"Virtual document: {file_path_str}"
+            
             # Check file size first - skip files larger than 10MB
             file_size = file_path.stat().st_size
             max_file_size = 10 * 1024 * 1024  # 10MB
@@ -442,8 +452,28 @@ class VectorSearchEngine:
                       schema_info: str = None, tags: List[str] = None, user_description: str = None) -> bool:
         """Index a single document with enhanced metadata"""
         try:
-            file_path = str(Path(file_path).resolve())
-            file_hash = self._get_file_hash(file_path)
+            # Handle virtual documents (datasets)
+            if file_path.startswith("dataset://"):
+                file_hash = hashlib.md5(file_path.encode()).hexdigest()
+                content = user_description or f"Virtual dataset document: {file_path}"
+                file_size = len(content.encode('utf-8'))
+                file_type = "dataset"
+                title = file_path.replace("dataset://", "")
+            else:
+                file_path = str(Path(file_path).resolve())
+                file_hash = self._get_file_hash(file_path)
+                
+                # Extract text content
+                content = self._extract_text_content(file_path)
+                if not content.strip():
+                    logger.warning(f"No content extracted from {file_path}")
+                    return False
+                    
+                # Get file metadata
+                file_stat = Path(file_path).stat()
+                file_size = file_stat.st_size
+                file_type = Path(file_path).suffix.lower()
+                title = Path(file_path).stem
             
             # Check if document is already indexed and unchanged
             db_path_str = str(self.vector_db_path.resolve())
@@ -461,19 +491,7 @@ class VectorSearchEngine:
                 logger.debug(f"Document {file_path} already indexed and unchanged")
                 conn.close()
                 return True
-                
-            # Extract text content
-            content = self._extract_text_content(file_path)
-            if not content.strip():
-                logger.warning(f"No content extracted from {file_path}")
-                conn.close()
-                return False
-                
-            # Get file metadata
-            file_stat = Path(file_path).stat()
-            file_size = file_stat.st_size
-            file_type = Path(file_path).suffix.lower()
-            title = Path(file_path).stem
+            
             content_preview = content[:200] + "..." if len(content) > 200 else content
             
             # Detect schema for structured files

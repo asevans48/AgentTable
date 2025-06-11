@@ -554,15 +554,90 @@ Files larger than 10MB are automatically skipped to prevent performance issues.
                         total_results['indexed_files'] += results.get('indexed_files', 0)
                         total_results['errors'].extend(results.get('errors', []))
                     
-                    # Index datasets (placeholder for future implementation)
+                    # Index datasets
                     for dataset_name in self.datasets:
                         current_source += 1
                         progress = int((current_source / total_sources) * 100)
                         self.progress_updated.emit(progress, f"Indexing dataset: {dataset_name}")
+                
+                        try:
+                            # Get dataset configuration
+                            datasets = self.config_manager.get_registered_datasets()
+                            dataset_config = None
+                            for ds in datasets:
+                                if ds.get('name') == dataset_name:
+                                    dataset_config = ds
+                                    break
+                    
+                            if dataset_config:
+                                # Index dataset based on type
+                                dataset_type = dataset_config.get('type', 'unknown')
                         
-                        # TODO: Implement dataset indexing based on dataset type
-                        # This would connect to databases, APIs, etc.
-                        total_results['indexed_datasets'] += 1
+                                if dataset_type == 'file_directory':
+                                    # Index as directory
+                                    source_path = dataset_config.get('source', '')
+                                    if source_path and Path(source_path).exists():
+                                        results = self.vector_engine.index_directory(
+                                            source_path,
+                                            fileset_name=dataset_name,
+                                            fileset_description=dataset_config.get('description', ''),
+                                            tags=dataset_config.get('tags', [])
+                                        )
+                                        total_results['total_files'] += results.get('total_files', 0)
+                                        total_results['indexed_files'] += results.get('indexed_files', 0)
+                                        total_results['errors'].extend(results.get('errors', []))
+                        
+                                elif dataset_type in ['database', 'sql']:
+                                    # For database datasets, create a virtual document with metadata
+                                    virtual_content = f"""
+        Dataset: {dataset_name}
+        Type: {dataset_type}
+        Description: {dataset_config.get('description', '')}
+        Connection: {dataset_config.get('connection_string', 'N/A')}
+        Tables: {', '.join(dataset_config.get('tables', []))}
+        Schema: {dataset_config.get('schema_info', '')}
+                                    """.strip()
+                            
+                                    # Index as a virtual document
+                                    success = self.vector_engine.index_document(
+                                        f"dataset://{dataset_name}",
+                                        fileset_name=dataset_name,
+                                        fileset_description=dataset_config.get('description', ''),
+                                        tags=dataset_config.get('tags', []) + ['dataset', dataset_type],
+                                        user_description=virtual_content
+                                    )
+                            
+                                    if success:
+                                        total_results['indexed_files'] += 1
+                                    else:
+                                        total_results['errors'].append(f"Failed to index dataset: {dataset_name}")
+                        
+                                else:
+                                    # Generic dataset indexing
+                                    virtual_content = f"""
+        Dataset: {dataset_name}
+        Type: {dataset_type}
+        Description: {dataset_config.get('description', '')}
+        Source: {dataset_config.get('source', '')}
+                                    """.strip()
+                            
+                                    success = self.vector_engine.index_document(
+                                        f"dataset://{dataset_name}",
+                                        fileset_name=dataset_name,
+                                        fileset_description=dataset_config.get('description', ''),
+                                        tags=dataset_config.get('tags', []) + ['dataset', dataset_type],
+                                        user_description=virtual_content
+                                    )
+                            
+                                    if success:
+                                        total_results['indexed_files'] += 1
+                                    else:
+                                        total_results['errors'].append(f"Failed to index dataset: {dataset_name}")
+                    
+                            total_results['indexed_datasets'] += 1
+                    
+                        except Exception as e:
+                            total_results['errors'].append(f"Error indexing dataset {dataset_name}: {str(e)}")
                         
                     self.indexing_complete.emit(total_results)
                     
