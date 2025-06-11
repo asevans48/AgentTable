@@ -389,8 +389,9 @@ class FileBrowser(QWidget):
         # Folder view (list widget with icons)
         self.file_list = QListWidget()
         self.file_list.setViewMode(QListWidget.ViewMode.IconMode)
-        self.file_list.setIconSize(QIcon().actualSize(QIcon().availableSizes()[0] if QIcon().availableSizes() else (48, 48)))
-        self.file_list.setGridSize(QIcon().actualSize((80, 100)))
+        from PyQt6.QtCore import QSize
+        self.file_list.setIconSize(QSize(48, 48))
+        self.file_list.setGridSize(QSize(80, 100))
         self.file_list.setResizeMode(QListWidget.ResizeMode.Adjust)
         self.file_list.setStyleSheet("""
             QListWidget {
