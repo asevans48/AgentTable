@@ -897,13 +897,20 @@ class FileBrowser(QWidget):
                 self.config_manager.add_watched_directory(directory)
                 self.directory_added.emit(directory)
                 
-                # Start indexing with metadata
-                self.start_indexing_with_metadata(metadata)
+                # Show message about vector indexing
+                QMessageBox.information(
+                    self,
+                    "Directory Added",
+                    f"Directory '{metadata.get('fileset_name', 'Unknown')}' has been added to the file browser.\n\n"
+                    "To enable vector search for this directory, go to the Search section and click 'Rebuild Index'."
+                )
             else:
                 # User cancelled, add without metadata
                 self.config_manager.add_watched_directory(directory)
                 self.directory_added.emit(directory)
-                self.start_indexing()
+            
+            # Reload watched directories to show the new one
+            self.load_watched_directories()
             
     def refresh(self):
         """Refresh the current directory view"""
@@ -970,23 +977,9 @@ class FileBrowser(QWidget):
     def on_directory_changed(self, path: str):
         """Handle directory changes from file watcher"""
         logger.info(f"Directory changed: {path}")
-        # Trigger re-indexing of changed directory
-        self.start_indexing()
-        
-    def on_file_changed(self, path: str):
-        """Handle file changes from file watcher"""
-        logger.info(f"File changed: {path}")
-        # Update file info if it's in our list
-        for i, file_info in enumerate(self.indexed_files):
-            if file_info['path'] == path:
-                # Re-index this specific file
-                try:
-                    updated_info = self.indexer_worker.get_file_info(Path(path))
-                    self.indexed_files[i] = updated_info
-                    self.apply_filters()
-                except Exception as e:
-                    logger.warning(f"Failed to update file info for {path}: {e}")
-                break
+        # Refresh current view if we're viewing the changed directory
+        if self.current_directory and Path(path) == Path(self.current_directory):
+            self.refresh()
                 
     def show_file_details(self, file_path: str):
         """Show file details in the details panel"""
@@ -1171,20 +1164,6 @@ Directory: {file_info.absolutePath()}
             """.strip()
             
             QMessageBox.information(self, "File Properties", properties_text)
-            
-    def refresh(self):
-        """Refresh file list"""
-        self.start_indexing()
-        
-    def get_selected_file(self) -> Optional[str]:
-        """Get currently selected file path"""
-        selection = self.file_tree.selectionModel()
-        if selection.hasSelection():
-            index = selection.currentIndex()
-            if index.isValid():
-                name_item = self.file_model.item(index.row(), 0)
-                return name_item.data(Qt.ItemDataRole.UserRole)
-        return None
 
 class DirectoryMetadataDialog(QDialog):
     """Dialog for collecting metadata when adding a directory"""
@@ -1488,19 +1467,3 @@ class DirectoryMetadataDialog(QDialog):
             'directory_path': self.directory_path
         }
         
-            
-            
-            
-            
-            
-    def get_metadata(self) -> Dict[str, Any]:
-        """Get the collected metadata"""
-        tags_list = [tag.strip() for tag in self.tags.text().split(',') if tag.strip()]
-        
-        return {
-            'fileset_name': self.fileset_name.text().strip(),
-            'description': self.description.toPlainText().strip(),
-            'schema_info': self.schema_info.toPlainText().strip(),
-            'tags': tags_list,
-            'directory_path': self.directory_path
-        }
