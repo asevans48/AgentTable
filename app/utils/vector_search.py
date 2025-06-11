@@ -3,14 +3,14 @@ Vector Search Implementation
 Provides vector search capabilities using local embeddings and vector databases
 """
 
-import os
 import json
 import sqlite3
 import logging
-from pathlib import Path
-from typing import List, Dict, Any, Optional, Tuple
-from datetime import datetime
 import hashlib
+import traceback
+from pathlib import Path
+from typing import List, Dict, Any
+from datetime import datetime
 
 try:
     import numpy as np
@@ -533,6 +533,8 @@ class VectorSearchEngine:
             return True
             
         except Exception as e:
+            tbl = traceback.format_exc()
+            logger.error(tbl)
             logger.error(f"Error indexing document {file_path}: {e}")
             return False
             
