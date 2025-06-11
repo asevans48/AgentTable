@@ -37,8 +37,14 @@ class VectorSearchEngine:
         
         # Vector search configuration with absolute paths
         default_data_dir = Path.cwd() / "data"
-        db_path_config = config_manager.get("vector_search.database_path", str(default_data_dir / "vector_search.db"))
-        embed_path_config = config_manager.get("vector_search.embeddings_path", str(default_data_dir / "embeddings"))
+        db_path_config = config_manager.get("vector_search.database_path", "")
+        embed_path_config = config_manager.get("vector_search.embeddings_path", "")
+        
+        # Use defaults if paths are empty
+        if not db_path_config:
+            db_path_config = str(default_data_dir / "vector_search.db")
+        if not embed_path_config:
+            embed_path_config = str(default_data_dir / "embeddings")
         
         # Ensure we have proper file paths, not directories
         self.vector_db_path = Path(db_path_config)

@@ -257,11 +257,28 @@ class VectorSearchTab(QWidget):
         db_path_layout = QHBoxLayout()
         self.database_path = QLineEdit()
         self.database_path.setPlaceholderText("Path to vector search database")
+        self.database_path.textChanged.connect(self.update_status)
         db_path_layout.addWidget(self.database_path)
         
         browse_db_btn = QPushButton("Browse...")
         browse_db_btn.clicked.connect(self.browse_database_path)
         db_path_layout.addWidget(browse_db_btn)
+        
+        create_db_btn = QPushButton("Create New")
+        create_db_btn.setToolTip("Create a new vector database file")
+        create_db_btn.clicked.connect(self.create_new_database)
+        create_db_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #28a745;
+                color: white;
+                border: none;
+                padding: 4px 8px;
+                border-radius: 3px;
+                font-weight: bold;
+            }
+            QPushButton:hover { background-color: #218838; }
+        """)
+        db_path_layout.addWidget(create_db_btn)
         
         reset_db_btn = QPushButton("Reset")
         reset_db_btn.setToolTip("Reset to default path")
@@ -274,11 +291,28 @@ class VectorSearchTab(QWidget):
         embed_path_layout = QHBoxLayout()
         self.embeddings_path = QLineEdit()
         self.embeddings_path.setPlaceholderText("Path to embeddings storage")
+        self.embeddings_path.textChanged.connect(self.update_status)
         embed_path_layout.addWidget(self.embeddings_path)
         
         browse_embed_btn = QPushButton("Browse...")
         browse_embed_btn.clicked.connect(self.browse_embeddings_path)
         embed_path_layout.addWidget(browse_embed_btn)
+        
+        create_embed_btn = QPushButton("Create Dir")
+        create_embed_btn.setToolTip("Create embeddings directory")
+        create_embed_btn.clicked.connect(self.create_embeddings_directory)
+        create_embed_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #17a2b8;
+                color: white;
+                border: none;
+                padding: 4px 8px;
+                border-radius: 3px;
+                font-weight: bold;
+            }
+            QPushButton:hover { background-color: #138496; }
+        """)
+        embed_path_layout.addWidget(create_embed_btn)
         
         reset_embed_btn = QPushButton("Reset")
         reset_embed_btn.setToolTip("Reset to default path")
@@ -337,16 +371,48 @@ class VectorSearchTab(QWidget):
         layout.addWidget(search_group)
         
         # Status and Testing
-        status_group = QGroupBox("Status")
+        status_group = QGroupBox("Status & Actions")
         status_layout = QVBoxLayout(status_group)
         
         self.status_label = QLabel("Vector search status will be shown here")
-        self.status_label.setStyleSheet("color: #666; font-style: italic;")
+        self.status_label.setStyleSheet("color: #666; font-style: italic; padding: 8px;")
+        self.status_label.setWordWrap(True)
         status_layout.addWidget(self.status_label)
+        
+        # Action buttons layout
+        actions_layout = QHBoxLayout()
         
         test_btn = QPushButton("Test Configuration")
         test_btn.clicked.connect(self.test_configuration)
-        status_layout.addWidget(test_btn)
+        test_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #007bff;
+                color: white;
+                border: none;
+                padding: 8px 16px;
+                border-radius: 4px;
+                font-weight: bold;
+            }
+            QPushButton:hover { background-color: #0056b3; }
+        """)
+        actions_layout.addWidget(test_btn)
+        
+        initialize_btn = QPushButton("Initialize Default Database")
+        initialize_btn.clicked.connect(self.initialize_default_database)
+        initialize_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #28a745;
+                color: white;
+                border: none;
+                padding: 8px 16px;
+                border-radius: 4px;
+                font-weight: bold;
+            }
+            QPushButton:hover { background-color: #218838; }
+        """)
+        actions_layout.addWidget(initialize_btn)
+        
+        status_layout.addLayout(actions_layout)
         
         layout.addWidget(status_group)
         
@@ -375,6 +441,80 @@ class VectorSearchTab(QWidget):
             self.embeddings_path.setText(dir_path)
             self.update_status()
             
+    def create_new_database(self):
+        """Create a new vector database file"""
+        file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Create New Vector Database",
+            str(Path.cwd() / "data" / "vector_search.db"),
+            "Database Files (*.db);;All Files (*)"
+        )
+        
+        if file_path:
+            try:
+                # Ensure the directory exists
+                db_path = Path(file_path)
+                db_path.parent.mkdir(parents=True, exist_ok=True)
+                
+                # Create the database file by initializing it
+                from utils.vector_search import VectorSearchEngine
+                
+                # Temporarily set the path in config
+                old_path = self.config_manager.get("vector_search.database_path")
+                self.config_manager.set("vector_search.database_path", str(db_path))
+                
+                # Initialize the database
+                vector_engine = VectorSearchEngine(self.config_manager)
+                
+                # Restore old path temporarily
+                self.config_manager.set("vector_search.database_path", old_path)
+                
+                # Set the new path in the UI
+                self.database_path.setText(str(db_path))
+                self.update_status()
+                
+                QMessageBox.information(
+                    self,
+                    "Database Created",
+                    f"Vector database successfully created at:\n{db_path}"
+                )
+                
+            except Exception as e:
+                QMessageBox.critical(
+                    self,
+                    "Error Creating Database",
+                    f"Failed to create vector database:\n{str(e)}"
+                )
+                
+    def create_embeddings_directory(self):
+        """Create embeddings directory"""
+        dir_path = QFileDialog.getExistingDirectory(
+            self,
+            "Select Location for Embeddings Directory",
+            str(Path.cwd() / "data")
+        )
+        
+        if dir_path:
+            try:
+                embeddings_path = Path(dir_path) / "embeddings"
+                embeddings_path.mkdir(parents=True, exist_ok=True)
+                
+                self.embeddings_path.setText(str(embeddings_path))
+                self.update_status()
+                
+                QMessageBox.information(
+                    self,
+                    "Directory Created",
+                    f"Embeddings directory created at:\n{embeddings_path}"
+                )
+                
+            except Exception as e:
+                QMessageBox.critical(
+                    self,
+                    "Error Creating Directory",
+                    f"Failed to create embeddings directory:\n{str(e)}"
+                )
+        
     def reset_database_path(self):
         """Reset database path to default"""
         default_path = str(Path.cwd() / "data" / "vector_search.db")
@@ -414,19 +554,102 @@ class VectorSearchTab(QWidget):
             self.status_label.setText(f"❌ Configuration error: {str(e)}")
             self.status_label.setStyleSheet("color: #dc3545; font-weight: bold;")
             
+    def initialize_default_database(self):
+        """Initialize default vector database and embeddings directory"""
+        try:
+            # Set default paths
+            default_data_dir = Path.cwd() / "data"
+            default_db_path = default_data_dir / "vector_search.db"
+            default_embed_path = default_data_dir / "embeddings"
+            
+            # Create directories
+            default_data_dir.mkdir(parents=True, exist_ok=True)
+            default_embed_path.mkdir(parents=True, exist_ok=True)
+            
+            # Initialize database
+            from utils.vector_search import VectorSearchEngine
+            
+            # Temporarily set paths in config
+            old_db_path = self.config_manager.get("vector_search.database_path")
+            old_embed_path = self.config_manager.get("vector_search.embeddings_path")
+            
+            self.config_manager.set("vector_search.database_path", str(default_db_path))
+            self.config_manager.set("vector_search.embeddings_path", str(default_embed_path))
+            
+            # Create the vector engine (this will initialize the database)
+            vector_engine = VectorSearchEngine(self.config_manager)
+            
+            # Restore old paths temporarily
+            self.config_manager.set("vector_search.database_path", old_db_path)
+            self.config_manager.set("vector_search.embeddings_path", old_embed_path)
+            
+            # Update UI with new paths
+            self.database_path.setText(str(default_db_path))
+            self.embeddings_path.setText(str(default_embed_path))
+            self.update_status()
+            
+            QMessageBox.information(
+                self,
+                "Default Database Initialized",
+                f"Default vector search database and embeddings directory created:\n\n"
+                f"Database: {default_db_path}\n"
+                f"Embeddings: {default_embed_path}\n\n"
+                f"You can now start indexing documents!"
+            )
+            
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "Initialization Error",
+                f"Failed to initialize default database:\n{str(e)}"
+            )
+    
     def update_status(self):
         """Update the status display"""
         try:
             from pathlib import Path
-            db_path = Path(self.database_path.text())
-            if db_path.exists():
-                self.status_label.setText(f"✅ Database exists at: {db_path}")
-                self.status_label.setStyleSheet("color: #28a745;")
+            db_path_text = self.database_path.text().strip()
+            embed_path_text = self.embeddings_path.text().strip()
+            
+            if not db_path_text and not embed_path_text:
+                self.status_label.setText("⚠️ No paths configured. Click 'Initialize Default Database' to get started.")
+                self.status_label.setStyleSheet("color: #ffc107; font-weight: bold;")
+                return
+                
+            status_parts = []
+            
+            if db_path_text:
+                db_path = Path(db_path_text)
+                if db_path.exists():
+                    status_parts.append(f"✅ Database exists: {db_path.name}")
+                else:
+                    status_parts.append(f"📁 Database location: {db_path.name} (will be created)")
+                    
+            if embed_path_text:
+                embed_path = Path(embed_path_text)
+                if embed_path.exists():
+                    status_parts.append(f"✅ Embeddings directory exists: {embed_path.name}")
+                else:
+                    status_parts.append(f"📁 Embeddings location: {embed_path.name} (will be created)")
+            
+            if status_parts:
+                self.status_label.setText(" | ".join(status_parts))
+                # Check if both paths exist
+                db_exists = Path(db_path_text).exists() if db_path_text else False
+                embed_exists = Path(embed_path_text).exists() if embed_path_text else False
+                
+                if db_exists and embed_exists:
+                    self.status_label.setStyleSheet("color: #28a745; font-weight: bold;")
+                elif db_exists or embed_exists:
+                    self.status_label.setStyleSheet("color: #ffc107; font-weight: bold;")
+                else:
+                    self.status_label.setStyleSheet("color: #17a2b8; font-weight: bold;")
             else:
-                self.status_label.setText(f"📁 Database will be created at: {db_path}")
+                self.status_label.setText("⚠️ Please configure database and embeddings paths")
                 self.status_label.setStyleSheet("color: #ffc107;")
+                
         except Exception as e:
-            self.status_label.setText(f"❌ Invalid path: {str(e)}")
+            self.status_label.setText(f"❌ Error checking paths: {str(e)}")
             self.status_label.setStyleSheet("color: #dc3545;")
         
     def load_settings(self):
@@ -436,12 +659,19 @@ class VectorSearchTab(QWidget):
         default_db_path = str(Path.cwd() / "data" / "vector_search.db")
         default_embed_path = str(Path.cwd() / "data" / "embeddings")
         
-        self.database_path.setText(
-            self.config_manager.get("vector_search.database_path", default_db_path)
-        )
-        self.embeddings_path.setText(
-            self.config_manager.get("vector_search.embeddings_path", default_embed_path)
-        )
+        # Load paths from config, but don't set defaults if they're empty
+        db_path = self.config_manager.get("vector_search.database_path", "")
+        embed_path = self.config_manager.get("vector_search.embeddings_path", "")
+        
+        # Only set default paths if nothing is configured
+        if not db_path:
+            db_path = default_db_path
+        if not embed_path:
+            embed_path = default_embed_path
+            
+        self.database_path.setText(db_path)
+        self.embeddings_path.setText(embed_path)
+        
         self.embedding_model.setCurrentText(
             self.config_manager.get("vector_search.model", "all-MiniLM-L6-v2")
         )

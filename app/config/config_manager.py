@@ -92,8 +92,8 @@ class ConfigManager:
                 "ssl_verification": True
             },
             "vector_search": {
-                "database_path": "data/vector_search.db",
-                "embeddings_path": "data/embeddings",
+                "database_path": "",
+                "embeddings_path": "",
                 "model": "all-MiniLM-L6-v2",
                 "max_chunk_size": 512,
                 "chunk_overlap": 50,
