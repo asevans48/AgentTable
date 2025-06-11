@@ -340,8 +340,9 @@ class SearchResults(QWidget):
     item_selected = pyqtSignal(dict)  # selected result data
     chat_requested = pyqtSignal(dict)  # result data for chat
     
-    def __init__(self, parent=None):
+    def __init__(self, config_manager=None, parent=None):
         super().__init__(parent)
+        self.config_manager = config_manager
         self.current_results = []
         self.search_worker = None
         
@@ -466,8 +467,7 @@ class SearchResults(QWidget):
         self.sort_combo.setVisible(False)
         
         # Start background search
-        # Note: In real implementation, you'd pass actual config_manager
-        self.search_worker = SearchWorker(query, search_type, None)
+        self.search_worker = SearchWorker(query, search_type, self.config_manager)
         self.search_worker.results_ready.connect(self.on_results_ready)
         self.search_worker.error_occurred.connect(self.on_search_error)
         self.search_worker.progress_updated.connect(self.progress_bar.setValue)

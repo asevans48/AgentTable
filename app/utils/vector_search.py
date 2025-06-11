@@ -294,18 +294,28 @@ class VectorSearchEngine:
         }
         
         try:
+            # First pass: count total files for progress tracking
+            all_files = []
             for file_path in directory_path.rglob('*'):
                 if file_path.is_file() and file_path.suffix.lower() in file_extensions:
-                    results['total_files'] += 1
+                    all_files.append(file_path)
                     
-                    try:
-                        if self.index_document(str(file_path)):
-                            results['indexed_files'] += 1
-                        else:
-                            results['skipped_files'] += 1
-                    except Exception as e:
-                        results['failed_files'] += 1
-                        results['errors'].append(f"{file_path}: {str(e)}")
+            results['total_files'] = len(all_files)
+            
+            # Second pass: index files
+            for file_path in all_files:
+                try:
+                    if self.index_document(str(file_path)):
+                        results['indexed_files'] += 1
+                        logger.debug(f"Successfully indexed: {file_path}")
+                    else:
+                        results['skipped_files'] += 1
+                        logger.debug(f"Skipped (no content): {file_path}")
+                except Exception as e:
+                    results['failed_files'] += 1
+                    error_msg = f"{file_path.name}: {str(e)}"
+                    results['errors'].append(error_msg)
+                    logger.error(f"Failed to index {file_path}: {e}")
                         
         except Exception as e:
             logger.error(f"Error indexing directory {directory_path}: {e}")
@@ -459,10 +469,101 @@ class VectorSearchEngine:
             conn.close()
             
             # Clear embedding files
-            for embedding_file in self.embeddings_path.glob("*.npy"):
-                embedding_file.unlink()
-                
+            if self.embeddings_path.exists():
+                for embedding_file in self.embeddings_path.glob("*.npy"):
+                    try:
+                        embedding_file.unlink()
+                    except Exception as e:
+                        logger.warning(f"Failed to delete embedding file {embedding_file}: {e}")
+                        
             logger.info("Vector search index cleared")
             
         except Exception as e:
             logger.error(f"Error clearing index: {e}")
+            raise
+            
+    def rebuild_index(self, directories: List[str]) -> Dict[str, Any]:
+        """Rebuild the entire vector search index"""
+        try:
+            # Clear existing index
+            self.clear_index()
+            
+            # Index all directories
+            total_results = {
+                'total_files': 0,
+                'indexed_files': 0,
+                'failed_files': 0,
+                'skipped_files': 0,
+                'errors': []
+            }
+            
+            for directory in directories:
+                if not Path(directory).exists():
+                    total_results['errors'].append(f"Directory not found: {directory}")
+                    continue
+                    
+                results = self.index_directory(directory)
+                
+                total_results['total_files'] += results['total_files']
+                total_results['indexed_files'] += results['indexed_files']
+                total_results['failed_files'] += results['failed_files']
+                total_results['skipped_files'] += results['skipped_files']
+                total_results['errors'].extend(results['errors'])
+                
+            logger.info(f"Index rebuild complete: {total_results['indexed_files']}/{total_results['total_files']} files indexed")
+            return total_results
+            
+        except Exception as e:
+            logger.error(f"Error rebuilding index: {e}")
+            raise
+            
+    def get_index_stats(self) -> Dict[str, Any]:
+        """Get statistics about the current index"""
+        try:
+            conn = sqlite3.connect(self.vector_db_path)
+            cursor = conn.cursor()
+            
+            # Get document count
+            cursor.execute("SELECT COUNT(*) FROM documents WHERE indexed_at IS NOT NULL")
+            doc_count = cursor.fetchone()[0]
+            
+            # Get chunk count
+            cursor.execute("SELECT COUNT(*) FROM chunks")
+            chunk_count = cursor.fetchone()[0]
+            
+            # Get total file size
+            cursor.execute("SELECT SUM(file_size) FROM documents WHERE indexed_at IS NOT NULL")
+            total_size = cursor.fetchone()[0] or 0
+            
+            # Get file types
+            cursor.execute("""
+                SELECT file_type, COUNT(*) 
+                FROM documents 
+                WHERE indexed_at IS NOT NULL 
+                GROUP BY file_type
+            """)
+            file_types = dict(cursor.fetchall())
+            
+            # Get recent indexing activity
+            cursor.execute("""
+                SELECT COUNT(*) 
+                FROM documents 
+                WHERE indexed_at > datetime('now', '-24 hours')
+            """)
+            recent_count = cursor.fetchone()[0]
+            
+            conn.close()
+            
+            return {
+                'document_count': doc_count,
+                'chunk_count': chunk_count,
+                'total_size_bytes': total_size,
+                'file_types': file_types,
+                'recent_indexing_count': recent_count,
+                'embeddings_path': str(self.embeddings_path),
+                'database_path': str(self.vector_db_path)
+            }
+            
+        except Exception as e:
+            logger.error(f"Error getting index stats: {e}")
+            return {}

@@ -348,7 +348,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.search_bar)
         
         # Search results area
-        self.search_results = SearchResults()
+        self.search_results = SearchResults(self.config_manager)
         layout.addWidget(self.search_results)
         
         return panel
@@ -475,6 +475,7 @@ class MainWindow(QMainWindow):
         """Setup signal-slot connections"""
         self.sections_tree.itemClicked.connect(self.on_section_clicked)
         self.search_bar.search_triggered.connect(self.perform_search)
+        self.search_bar.chat_triggered.connect(self.handle_chat_request)
         self.file_browser.file_selected.connect(self.on_file_selected)
         self.dataset_browser.dataset_selected.connect(self.on_dataset_selected)
         
@@ -492,6 +493,14 @@ class MainWindow(QMainWindow):
         
         # Trigger search in search results widget
         self.search_results.perform_search(query, search_type)
+        
+    def handle_chat_request(self, message):
+        """Handle AI chat request"""
+        self.status_bar.showMessage(f"AI Chat: {message}")
+        
+        # For now, treat chat as a special search type
+        # In the future, this would integrate with AI chat functionality
+        self.search_results.perform_search(message, "AI Chat")
         
     def on_file_selected(self, file_path):
         """Handle file selection from file browser"""

@@ -71,66 +71,488 @@ class VectorSearchTab(QWidget):
     """Vector search tab widget"""
     
     search_performed = pyqtSignal(str, dict)  # query, results
+    indexing_started = pyqtSignal()  # indexing started
+    indexing_completed = pyqtSignal(dict)  # indexing results
     
     def __init__(self, config_manager, parent=None):
         super().__init__(parent)
         self.config_manager = config_manager
+        self.vector_engine = None
+        self.indexing_worker = None
         self.setup_ui()
+        self.setup_connections()
+        self.load_vector_engine()
         
     def setup_ui(self):
         """Setup vector search UI"""
         layout = QVBoxLayout(self)
         
+        # Vector Database Management Section
+        db_management_frame = QFrame()
+        db_management_frame.setFrameStyle(QFrame.Shape.StyledPanel)
+        db_management_frame.setStyleSheet("""
+            QFrame {
+                background-color: #f8f9fa;
+                border: 1px solid #dee2e6;
+                border-radius: 4px;
+                padding: 8px;
+            }
+        """)
+        db_layout = QVBoxLayout(db_management_frame)
+        
+        # Database status and controls
+        db_header_layout = QHBoxLayout()
+        
+        db_title = QLabel("Vector Database")
+        db_title.setFont(QFont("Arial", 11, QFont.Weight.Bold))
+        db_header_layout.addWidget(db_title)
+        
+        db_header_layout.addStretch()
+        
+        # Database management buttons
+        self.rebuild_btn = QPushButton("🔄 Rebuild Index")
+        self.rebuild_btn.setToolTip("Rebuild the entire vector search index")
+        self.rebuild_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #007bff;
+                color: white;
+                border: none;
+                padding: 6px 12px;
+                border-radius: 4px;
+                font-weight: bold;
+            }
+            QPushButton:hover { background-color: #0056b3; }
+            QPushButton:disabled { background-color: #6c757d; }
+        """)
+        db_header_layout.addWidget(self.rebuild_btn)
+        
+        self.clear_index_btn = QPushButton("🗑️ Clear")
+        self.clear_index_btn.setToolTip("Clear all indexed documents")
+        self.clear_index_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #dc3545;
+                color: white;
+                border: none;
+                padding: 6px 12px;
+                border-radius: 4px;
+            }
+            QPushButton:hover { background-color: #c82333; }
+            QPushButton:disabled { background-color: #6c757d; }
+        """)
+        db_header_layout.addWidget(self.clear_index_btn)
+        
+        db_layout.addLayout(db_header_layout)
+        
+        # Database status
+        self.db_status_label = QLabel("Loading vector search engine...")
+        self.db_status_label.setStyleSheet("color: #495057; font-size: 9pt; margin: 4px 0;")
+        db_layout.addWidget(self.db_status_label)
+        
+        # Indexing progress
+        self.indexing_progress = QProgressBar()
+        self.indexing_progress.setVisible(False)
+        self.indexing_progress.setStyleSheet("""
+            QProgressBar {
+                border: 1px solid #ddd;
+                border-radius: 4px;
+                text-align: center;
+                height: 20px;
+            }
+            QProgressBar::chunk {
+                background-color: #007bff;
+                border-radius: 3px;
+            }
+        """)
+        db_layout.addWidget(self.indexing_progress)
+        
+        self.indexing_status_label = QLabel("")
+        self.indexing_status_label.setStyleSheet("color: #6c757d; font-size: 8pt;")
+        self.indexing_status_label.setVisible(False)
+        db_layout.addWidget(self.indexing_status_label)
+        
+        layout.addWidget(db_management_frame)
+        
         # Search configuration
         config_frame = QFrame()
         config_frame.setFrameStyle(QFrame.Shape.StyledPanel)
-        config_layout = QHBoxLayout(config_frame)
+        config_frame.setStyleSheet("""
+            QFrame {
+                background-color: #ffffff;
+                border: 1px solid #dee2e6;
+                border-radius: 4px;
+                padding: 8px;
+            }
+        """)
+        config_layout = QVBoxLayout(config_frame)
+        
+        # Configuration title
+        config_title = QLabel("Search Configuration")
+        config_title.setFont(QFont("Arial", 11, QFont.Weight.Bold))
+        config_layout.addWidget(config_title)
+        
+        # Configuration controls
+        config_controls_layout = QHBoxLayout()
         
         # Embedding model selection
-        config_layout.addWidget(QLabel("Model:"))
+        config_controls_layout.addWidget(QLabel("Model:"))
         self.model_combo = QComboBox()
         self.model_combo.addItems([
-            "all-MiniLM-L6-v2", "all-mpnet-base-v2", "text-embedding-ada-002"
+            "all-MiniLM-L6-v2", "all-mpnet-base-v2", "sentence-transformers/all-roberta-large-v1"
         ])
-        config_layout.addWidget(self.model_combo)
-        
-        # Search scope
-        config_layout.addWidget(QLabel("Scope:"))
-        self.scope_combo = QComboBox()
-        self.scope_combo.addItems(["All Documents", "Recent Files", "Accessible Only"])
-        config_layout.addWidget(self.scope_combo)
+        self.model_combo.setCurrentText(self.config_manager.get("vector_search.model", "all-MiniLM-L6-v2"))
+        config_controls_layout.addWidget(self.model_combo)
         
         # Max results
-        config_layout.addWidget(QLabel("Max Results:"))
+        config_controls_layout.addWidget(QLabel("Max Results:"))
         self.max_results = QComboBox()
         self.max_results.addItems(["10", "25", "50", "100"])
-        config_layout.addWidget(self.max_results)
+        self.max_results.setCurrentText("25")
+        config_controls_layout.addWidget(self.max_results)
         
-        config_layout.addStretch()
+        # Similarity threshold
+        config_controls_layout.addWidget(QLabel("Min Similarity:"))
+        self.similarity_threshold = QComboBox()
+        self.similarity_threshold.addItems(["0.1", "0.2", "0.3", "0.4", "0.5"])
+        self.similarity_threshold.setCurrentText("0.3")
+        config_controls_layout.addWidget(self.similarity_threshold)
+        
+        config_controls_layout.addStretch()
         
         # Semantic search toggle
         self.semantic_search = QCheckBox("Semantic Search")
         self.semantic_search.setChecked(True)
-        config_layout.addWidget(self.semantic_search)
+        config_controls_layout.addWidget(self.semantic_search)
         
+        config_layout.addLayout(config_controls_layout)
         layout.addWidget(config_frame)
         
-        # Results area (placeholder)
-        results_label = QLabel("Vector search results will appear here after implementing the search backend.")
-        results_label.setStyleSheet("""
-            QLabel {
-                color: #666;
-                font-style: italic;
-                text-align: center;
-                padding: 20px;
-                border: 2px dashed #ddd;
-                border-radius: 8px;
-                background-color: #f9f9f9;
+        # Instructions and status
+        instructions_frame = QFrame()
+        instructions_frame.setStyleSheet("""
+            QFrame {
+                background-color: #e9ecef;
+                border: 1px solid #ced4da;
+                border-radius: 4px;
+                padding: 12px;
             }
         """)
-        results_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        results_label.setWordWrap(True)
-        layout.addWidget(results_label)
+        instructions_layout = QVBoxLayout(instructions_frame)
+        
+        instructions = QLabel("""
+<b>Vector Search Instructions:</b><br>
+• Click "Rebuild Index" to index all files in watched directories<br>
+• Use the main search bar to perform semantic searches<br>
+• Results show content chunks with similarity scores<br>
+• Adjust similarity threshold to filter results
+        """)
+        instructions.setStyleSheet("color: #495057; font-size: 9pt; line-height: 1.4;")
+        instructions.setWordWrap(True)
+        instructions_layout.addWidget(instructions)
+        
+        layout.addWidget(instructions_frame)
+        
+        layout.addStretch()
+        
+    def setup_connections(self):
+        """Setup signal connections"""
+        self.rebuild_btn.clicked.connect(self.rebuild_vector_index)
+        self.clear_index_btn.clicked.connect(self.clear_vector_index)
+        self.model_combo.currentTextChanged.connect(self.on_model_changed)
+        
+    def load_vector_engine(self):
+        """Load the vector search engine"""
+        try:
+            from utils.vector_search import VectorSearchEngine
+            self.vector_engine = VectorSearchEngine(self.config_manager)
+            self.update_database_status()
+        except ImportError:
+            self.db_status_label.setText("❌ Vector search dependencies not installed")
+            self.db_status_label.setStyleSheet("color: #dc3545; font-weight: bold;")
+            self.rebuild_btn.setEnabled(False)
+            self.clear_index_btn.setEnabled(False)
+        except Exception as e:
+            self.db_status_label.setText(f"❌ Error loading vector engine: {str(e)}")
+            self.db_status_label.setStyleSheet("color: #dc3545; font-weight: bold;")
+            
+    def update_database_status(self):
+        """Update database status display"""
+        if not self.vector_engine:
+            return
+            
+        try:
+            docs = self.vector_engine.get_indexed_documents()
+            doc_count = len(docs)
+            
+            if doc_count > 0:
+                self.db_status_label.setText(f"✅ {doc_count} documents indexed and ready for search")
+                self.db_status_label.setStyleSheet("color: #28a745; font-weight: bold;")
+            else:
+                self.db_status_label.setText("📚 No documents indexed yet - click 'Rebuild Index' to get started")
+                self.db_status_label.setStyleSheet("color: #ffc107; font-weight: bold;")
+                
+        except Exception as e:
+            self.db_status_label.setText(f"❌ Status error: {str(e)}")
+            self.db_status_label.setStyleSheet("color: #dc3545;")
+            
+    def rebuild_vector_index(self):
+        """Rebuild the entire vector search index"""
+        if not self.vector_engine:
+            return
+            
+        try:
+            # Get watched directories
+            watched_dirs = self.config_manager.get("file_management.watched_directories", [])
+            
+            if not watched_dirs:
+                from PyQt6.QtWidgets import QMessageBox
+                QMessageBox.warning(
+                    self,
+                    "No Watched Directories",
+                    "No directories are being watched for indexing.\n\nPlease add directories in the Files tab or Settings."
+                )
+                return
+                
+            # Confirm rebuild
+            from PyQt6.QtWidgets import QMessageBox
+            reply = QMessageBox.question(
+                self,
+                "Rebuild Vector Index",
+                f"This will rebuild the entire vector search index for {len(watched_dirs)} watched directories.\n\nThis may take several minutes depending on the number of files.\n\nContinue?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.Yes
+            )
+            
+            if reply != QMessageBox.StandardButton.Yes:
+                return
+                
+            # Start indexing
+            self.start_indexing(watched_dirs, rebuild=True)
+            
+        except Exception as e:
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.critical(self, "Error", f"Failed to start indexing: {str(e)}")
+            
+    def clear_vector_index(self):
+        """Clear the vector search index"""
+        if not self.vector_engine:
+            return
+            
+        try:
+            from PyQt6.QtWidgets import QMessageBox
+            
+            reply = QMessageBox.question(
+                self,
+                "Clear Vector Index",
+                "Are you sure you want to clear the entire vector search index?\n\nThis will remove all indexed documents and embeddings.\n\nYou will need to rebuild the index to use vector search.",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No
+            )
+            
+            if reply == QMessageBox.StandardButton.Yes:
+                self.vector_engine.clear_index()
+                self.db_status_label.setText("🗑️ Vector index cleared")
+                self.db_status_label.setStyleSheet("color: #6c757d; font-weight: bold;")
+                self.update_database_status()
+                
+        except Exception as e:
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.critical(self, "Error", f"Failed to clear index: {str(e)}")
+            
+    def start_indexing(self, directories, rebuild=False):
+        """Start indexing process"""
+        if self.indexing_worker and self.indexing_worker.isRunning():
+            return  # Already indexing
+            
+        # Clear index if rebuilding
+        if rebuild:
+            try:
+                self.vector_engine.clear_index()
+            except Exception as e:
+                logger.warning(f"Failed to clear index before rebuild: {e}")
+                
+        # Show progress UI
+        self.indexing_progress.setVisible(True)
+        self.indexing_progress.setValue(0)
+        self.indexing_status_label.setVisible(True)
+        self.indexing_status_label.setText("Starting indexing...")
+        
+        # Disable buttons during indexing
+        self.rebuild_btn.setEnabled(False)
+        self.clear_index_btn.setEnabled(False)
+        
+        # Start indexing worker
+        from PyQt6.QtCore import QThread
+        
+        class IndexingWorker(QThread):
+            progress_updated = pyqtSignal(int, str)  # progress, status
+            indexing_complete = pyqtSignal(dict)  # results
+            error_occurred = pyqtSignal(str)  # error message
+            
+            def __init__(self, vector_engine, directories):
+                super().__init__()
+                self.vector_engine = vector_engine
+                self.directories = directories
+                
+            def run(self):
+                try:
+                    total_results = {
+                        'total_files': 0,
+                        'indexed_files': 0,
+                        'failed_files': 0,
+                        'skipped_files': 0,
+                        'errors': []
+                    }
+                    
+                    for i, directory in enumerate(self.directories):
+                        if not Path(directory).exists():
+                            continue
+                            
+                        self.progress_updated.emit(
+                            int((i / len(self.directories)) * 100),
+                            f"Indexing directory: {Path(directory).name}"
+                        )
+                        
+                        results = self.vector_engine.index_directory(directory)
+                        
+                        total_results['total_files'] += results['total_files']
+                        total_results['indexed_files'] += results['indexed_files']
+                        total_results['failed_files'] += results['failed_files']
+                        total_results['skipped_files'] += results['skipped_files']
+                        total_results['errors'].extend(results['errors'])
+                        
+                    self.indexing_complete.emit(total_results)
+                    
+                except Exception as e:
+                    self.error_occurred.emit(str(e))
+        
+        self.indexing_worker = IndexingWorker(self.vector_engine, directories)
+        self.indexing_worker.progress_updated.connect(self.on_indexing_progress)
+        self.indexing_worker.indexing_complete.connect(self.on_indexing_complete)
+        self.indexing_worker.error_occurred.connect(self.on_indexing_error)
+        self.indexing_worker.start()
+        
+        self.indexing_started.emit()
+        
+    def on_indexing_progress(self, progress, status):
+        """Handle indexing progress updates"""
+        self.indexing_progress.setValue(progress)
+        self.indexing_status_label.setText(status)
+        
+    def on_indexing_complete(self, results):
+        """Handle indexing completion"""
+        # Hide progress UI
+        self.indexing_progress.setVisible(False)
+        self.indexing_status_label.setVisible(False)
+        
+        # Re-enable buttons
+        self.rebuild_btn.setEnabled(True)
+        self.clear_index_btn.setEnabled(True)
+        
+        # Update status
+        indexed = results['indexed_files']
+        total = results['total_files']
+        failed = results['failed_files']
+        
+        if indexed > 0:
+            status_text = f"✅ Indexing complete: {indexed}/{total} files indexed"
+            if failed > 0:
+                status_text += f" ({failed} failed)"
+            self.db_status_label.setText(status_text)
+            self.db_status_label.setStyleSheet("color: #28a745; font-weight: bold;")
+        else:
+            self.db_status_label.setText("⚠️ No files were indexed")
+            self.db_status_label.setStyleSheet("color: #ffc107; font-weight: bold;")
+            
+        self.update_database_status()
+        self.indexing_completed.emit(results)
+        
+        # Show results dialog
+        self.show_indexing_results(results)
+        
+    def on_indexing_error(self, error_message):
+        """Handle indexing errors"""
+        # Hide progress UI
+        self.indexing_progress.setVisible(False)
+        self.indexing_status_label.setVisible(False)
+        
+        # Re-enable buttons
+        self.rebuild_btn.setEnabled(True)
+        self.clear_index_btn.setEnabled(True)
+        
+        # Show error
+        self.db_status_label.setText(f"❌ Indexing failed: {error_message}")
+        self.db_status_label.setStyleSheet("color: #dc3545; font-weight: bold;")
+        
+        from PyQt6.QtWidgets import QMessageBox
+        QMessageBox.critical(self, "Indexing Error", f"Indexing failed:\n\n{error_message}")
+        
+    def show_indexing_results(self, results):
+        """Show indexing results dialog"""
+        from PyQt6.QtWidgets import QDialog, QVBoxLayout, QTextEdit, QPushButton, QLabel
+        
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Indexing Results")
+        dialog.setModal(True)
+        dialog.setMinimumSize(500, 400)
+        
+        layout = QVBoxLayout(dialog)
+        
+        # Summary
+        summary = QLabel(f"""
+<h3>Indexing Complete</h3>
+<b>Total Files:</b> {results['total_files']}<br>
+<b>Successfully Indexed:</b> {results['indexed_files']}<br>
+<b>Failed:</b> {results['failed_files']}<br>
+<b>Skipped:</b> {results['skipped_files']}
+        """)
+        layout.addWidget(summary)
+        
+        # Errors (if any)
+        if results['errors']:
+            errors_label = QLabel("<b>Errors:</b>")
+            layout.addWidget(errors_label)
+            
+            errors_text = QTextEdit()
+            errors_text.setPlainText('\n'.join(results['errors']))
+            errors_text.setMaximumHeight(200)
+            errors_text.setReadOnly(True)
+            layout.addWidget(errors_text)
+            
+        # Close button
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(dialog.accept)
+        layout.addWidget(close_btn)
+        
+        dialog.exec()
+        
+    def on_model_changed(self, model_name):
+        """Handle model selection change"""
+        self.config_manager.set("vector_search.model", model_name)
+        
+        if self.vector_engine:
+            # Model change requires re-indexing
+            self.db_status_label.setText("⚠️ Model changed - rebuilding index recommended")
+            self.db_status_label.setStyleSheet("color: #ffc107; font-weight: bold;")
+            
+    def perform_search(self, query: str) -> dict:
+        """Perform vector search with current settings"""
+        if not self.vector_engine:
+            return {'error': 'Vector search engine not available'}
+            
+        try:
+            max_results = int(self.max_results.currentText())
+            similarity_threshold = float(self.similarity_threshold.currentText())
+            
+            results = self.vector_engine.search(
+                query=query,
+                max_results=max_results,
+                similarity_threshold=similarity_threshold
+            )
+            
+            return {'results': results, 'query': query}
+            
+        except Exception as e:
+            return {'error': f'Search failed: {str(e)}'}
 
 class DocumentViewerTab(QWidget):
     """Document viewer tab widget"""
