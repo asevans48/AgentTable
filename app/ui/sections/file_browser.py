@@ -1588,8 +1588,8 @@ class DirectoryMetadataDialog(QDialog):
             pass
             
         return "Python source code"
-        
-    def _detect_schema(self, file_path: str, content: str) -> str:
+            
+    def get_metadata(self) -> Dict[str, Any]:
         """Detect schema information for structured files"""
         try:
             file_path = Path(file_path)
