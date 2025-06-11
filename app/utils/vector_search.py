@@ -37,8 +37,22 @@ class VectorSearchEngine:
         
         # Vector search configuration with absolute paths
         default_data_dir = Path.cwd() / "data"
-        self.vector_db_path = Path(config_manager.get("vector_search.database_path", str(default_data_dir / "vector_search.db")))
-        self.embeddings_path = Path(config_manager.get("vector_search.embeddings_path", str(default_data_dir / "embeddings")))
+        db_path_config = config_manager.get("vector_search.database_path", str(default_data_dir / "vector_search.db"))
+        embed_path_config = config_manager.get("vector_search.embeddings_path", str(default_data_dir / "embeddings"))
+        
+        # Ensure we have proper file paths, not directories
+        self.vector_db_path = Path(db_path_config)
+        if self.vector_db_path.is_dir():
+            # If it's a directory, append the default filename
+            self.vector_db_path = self.vector_db_path / "vector_search.db"
+        elif not self.vector_db_path.suffix:
+            # If no file extension, assume it's a directory and add filename
+            self.vector_db_path = self.vector_db_path / "vector_search.db"
+            
+        self.embeddings_path = Path(embed_path_config)
+        if self.embeddings_path.is_file():
+            # If it's a file, use its parent directory
+            self.embeddings_path = self.embeddings_path.parent
         
         # Make paths absolute if they're relative
         if not self.vector_db_path.is_absolute():
@@ -82,10 +96,15 @@ class VectorSearchEngine:
             if not self.vector_db_path.parent.exists():
                 self.vector_db_path.parent.mkdir(parents=True, exist_ok=True)
                 
+            # Validate that we have a proper file path, not a directory
+            if self.vector_db_path.is_dir():
+                raise ValueError(f"Database path is a directory, not a file: {self.vector_db_path}")
+                
             # Use absolute path for SQLite connection
             db_path_str = str(self.vector_db_path.resolve())
             logger.info(f"Initializing vector database at: {db_path_str}")
             
+            # Test that we can create/access the database file
             conn = sqlite3.connect(db_path_str)
             cursor = conn.cursor()
             
@@ -136,7 +155,70 @@ class VectorSearchEngine:
             
         except Exception as e:
             logger.error(f"Error initializing vector database at {self.vector_db_path}: {e}")
-            raise RuntimeError(f"Cannot initialize vector database: {e}")
+            
+            # Try fallback location if the configured path fails
+            try:
+                fallback_dir = Path.home() / ".dataplatform" / "vector_search"
+                fallback_dir.mkdir(parents=True, exist_ok=True)
+                self.vector_db_path = fallback_dir / "vector_search.db"
+                self.embeddings_path = fallback_dir / "embeddings"
+                self.embeddings_path.mkdir(exist_ok=True)
+                
+                logger.warning(f"Using fallback database location: {self.vector_db_path}")
+                
+                # Try to initialize with fallback location
+                db_path_str = str(self.vector_db_path.resolve())
+                conn = sqlite3.connect(db_path_str)
+                cursor = conn.cursor()
+                
+                # Create tables (same as above)
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS documents (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        file_path TEXT UNIQUE NOT NULL,
+                        file_hash TEXT NOT NULL,
+                        title TEXT,
+                        content_preview TEXT,
+                        file_type TEXT,
+                        file_size INTEGER,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        indexed_at TIMESTAMP,
+                        chunk_count INTEGER DEFAULT 0
+                    )
+                """)
+                
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS chunks (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        document_id INTEGER,
+                        chunk_index INTEGER,
+                        content TEXT NOT NULL,
+                        embedding_id TEXT,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY (document_id) REFERENCES documents (id)
+                    )
+                """)
+                
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS search_history (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        query TEXT NOT NULL,
+                        search_type TEXT,
+                        results_count INTEGER,
+                        search_time REAL,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
+                
+                conn.commit()
+                conn.close()
+                
+                logger.info(f"Successfully initialized fallback vector database at: {self.vector_db_path}")
+                
+            except Exception as fallback_error:
+                logger.error(f"Failed to initialize fallback database: {fallback_error}")
+                raise RuntimeError(f"Cannot initialize vector database at {self.vector_db_path} or fallback location: {e}")
             
     def _load_model(self):
         """Load the sentence transformer model"""
