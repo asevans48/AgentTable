@@ -1590,25 +1590,16 @@ class DirectoryMetadataDialog(QDialog):
         return "Python source code"
             
     def get_metadata(self) -> Dict[str, Any]:
-        """Detect schema information for structured files"""
-        try:
-            file_path = Path(file_path)
-            file_ext = file_path.suffix.lower()
-            
-            if file_ext == '.csv':
-                return self._detect_csv_schema(file_path, content)
-            elif file_ext == '.json':
-                return self._detect_json_schema(file_path, content)
-            elif file_ext == '.py':
-                return self._detect_python_schema(content)
-            elif file_ext in ['.txt', '.md']:
-                return self._detect_text_schema(content)
-            else:
-                return f"File type: {file_ext}"
-                
-        except Exception as e:
-            logger.warning(f"Error detecting schema for {file_path}: {e}")
-            return ""
+        """Get the collected metadata"""
+        tags_list = [tag.strip() for tag in self.tags.text().split(',') if tag.strip()]
+        
+        return {
+            'fileset_name': self.fileset_name.text().strip(),
+            'description': self.description.toPlainText().strip(),
+            'schema_info': self.schema_info.toPlainText().strip(),
+            'tags': tags_list,
+            'directory_path': self.directory_path
+        }
             
     def _detect_csv_schema(self, file_path: Path, content: str) -> str:
         """Detect CSV schema"""
