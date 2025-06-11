@@ -439,6 +439,24 @@ class SettingsDialog(QDialog):
         
         layout.addWidget(self.tab_widget)
         
+        # Add cloud authentication shortcut
+        cloud_auth_button = QPushButton("Configure Cloud Authentication")
+        cloud_auth_button.setStyleSheet("""
+            QPushButton {
+                background-color: #17a2b8;
+                color: white;
+                border: none;
+                padding: 8px 16px;
+                border-radius: 4px;
+                margin: 10px;
+            }
+            QPushButton:hover {
+                background-color: #138496;
+            }
+        """)
+        cloud_auth_button.clicked.connect(self.show_cloud_auth)
+        layout.addWidget(cloud_auth_button)
+        
         # Buttons
         button_layout = QHBoxLayout()
         
