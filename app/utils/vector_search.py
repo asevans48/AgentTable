@@ -11,6 +11,7 @@ import traceback
 from pathlib import Path
 from typing import List, Dict, Any
 from datetime import datetime
+from utils.file.file_utils import detect_schema, generate_fileset_name
 
 try:
     import numpy as np
@@ -449,12 +450,12 @@ class VectorSearchEngine:
             content_preview = content[:200] + "..." if len(content) > 200 else content
             
             # Detect schema for structured files
-            detected_schema = self._detect_schema(file_path, content)
+            detected_schema = detect_schema(file_path, content)
             final_schema = schema_info or detected_schema
             
             # Auto-generate fileset name if not provided
             if not fileset_name:
-                fileset_name = self._generate_fileset_name(file_path)
+                fileset_name = generate_fileset_name(file_path)
                 
             # Convert tags to string
             tags_str = ','.join(tags) if tags else ''
