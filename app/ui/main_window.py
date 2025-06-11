@@ -11,6 +11,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFont, QAction, QPixmap, QPainter, QPen, QColor, QIcon
 from pathlib import Path
+import logging
 
 from ui.sections.file_browser import FileBrowser
 from ui.sections.dataset_browser import DatasetBrowser
@@ -18,6 +19,8 @@ from ui.widgets.search_bar import SearchBar
 from ui.widgets.search_results import SearchResults
 from ui.dialogs.settings_dialog import SettingsDialog
 from ui.dialogs.filter_dialog import FilterDialog
+
+logger = logging.getLogger(__name__)
 
 class MainWindow(QMainWindow):
     """Main application window"""
