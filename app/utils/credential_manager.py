@@ -135,6 +135,64 @@ class CloudCredentialManager:
         }
         return self.credential_manager.store_credential("AWS", profile_name, credential_data)
     
+    def store_azure_credentials(self, tenant_id: str, client_id: str, client_secret: str = None,
+                              certificate_path: str = None, subscription_id: str = None,
+                              auth_method: str = "Client Secret") -> bool:
+        """Store Azure credentials"""
+        credential_data = {
+            "type": "azure",
+            "tenant_id": tenant_id,
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "certificate_path": certificate_path,
+            "subscription_id": subscription_id,
+            "auth_method": auth_method
+        }
+        return self.credential_manager.store_credential("Azure", client_id, credential_data)
+    
+    def store_gcp_credentials(self, project_id: str, auth_method: str = "Service Account Key File",
+                            service_account_key: str = None, key_file_path: str = None, 
+                            scopes: List[str] = None, service_account_email: str = None) -> bool:
+        """Store GCP credentials"""
+        credential_data = {
+            "type": "gcp",
+            "project_id": project_id,
+            "auth_method": auth_method,
+            "service_account_key": service_account_key,
+            "key_file_path": key_file_path,
+            "scopes": scopes or ["https://www.googleapis.com/auth/cloud-platform"],
+            "service_account_email": service_account_email
+        }
+        return self.credential_manager.store_credential("GCP", project_id, credential_data)
+    
+    def store_oauth_credentials(self, provider: str, client_id: str, client_secret: str,
+                              redirect_uri: str, scopes: List[str] = None, 
+                              access_token: str = None, refresh_token: str = None) -> bool:
+        """Store OAuth credentials for various providers"""
+        credential_data = {
+            "type": "oauth",
+            "provider": provider,
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "redirect_uri": redirect_uri,
+            "scopes": scopes or [],
+            "access_token": access_token,
+            "refresh_token": refresh_token
+        }
+        return self.credential_manager.store_credential(f"OAuth_{provider}", client_id, credential_data)
+    
     def get_aws_credentials(self, profile_name: str) -> Optional[Dict[str, Any]]:
         """Retrieve AWS credentials"""
         return self.credential_manager.get_credential("AWS", profile_name)
+    
+    def get_azure_credentials(self, client_id: str) -> Optional[Dict[str, Any]]:
+        """Retrieve Azure credentials"""
+        return self.credential_manager.get_credential("Azure", client_id)
+    
+    def get_gcp_credentials(self, project_id: str) -> Optional[Dict[str, Any]]:
+        """Retrieve GCP credentials"""
+        return self.credential_manager.get_credential("GCP", project_id)
+    
+    def get_oauth_credentials(self, provider: str, client_id: str) -> Optional[Dict[str, Any]]:
+        """Retrieve OAuth credentials"""
+        return self.credential_manager.get_credential(f"OAuth_{provider}", client_id)
