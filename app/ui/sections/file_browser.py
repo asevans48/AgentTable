@@ -405,31 +405,24 @@ class FileBrowser(QWidget):
             item = self.watched_model.itemFromIndex(index)
             path = item.data(Qt.ItemDataRole.UserRole)
             if path:
-                self.navigate_to_directory(path)
+                self.current_directory = path
+                self.apply_filters()
                 
     def on_file_clicked(self, index):
         """Handle file clicks"""
         if index.isValid():
-            file_info = self.file_model.fileInfo(index)
-            if file_info.isDir():
-                # Double-click to enter directory, single click to select
-                return
-            else:
-                # Show file details
-                self.show_file_details(file_info.absoluteFilePath())
-                self.file_selected.emit(file_info.absoluteFilePath())
+            name_item = self.file_model.item(index.row(), 0)
+            file_path = name_item.data(Qt.ItemDataRole.UserRole)
+            self.show_file_details(file_path)
+            self.file_selected.emit(file_path)
                 
     def on_file_double_clicked(self, index):
         """Handle file double-clicks"""
         if index.isValid():
-            file_info = self.file_model.fileInfo(index)
-            if file_info.isDir():
-                # Navigate into directory
-                self.navigate_to_directory(file_info.absoluteFilePath())
-            else:
-                # Open file
-                self.open_file(file_info.absoluteFilePath())
-                self.file_double_clicked.emit(file_info.absoluteFilePath())
+            name_item = self.file_model.item(index.row(), 0)
+            file_path = name_item.data(Qt.ItemDataRole.UserRole)
+            self.open_file(file_path)
+            self.file_double_clicked.emit(file_path)
                 
     def on_selection_changed(self, selected, deselected):
         """Handle selection changes"""
@@ -475,17 +468,33 @@ class FileBrowser(QWidget):
             
     def apply_filters(self):
         """Apply current filters to file list"""
-        filter_text = self.filter_input.text().strip()
+        self.current_filter = self.filter_input.text()
         
-        if filter_text:
-            # Set name filter
-            self.file_model.setNameFilters([f"*{filter_text}*"])
-            self.file_model.setNameFilterDisables(False)
+        # Clear and repopulate models
+        self.file_model.clear()
+        self.file_model.setHorizontalHeaderLabels(['Name', 'Type', 'Size', 'Tags'])
+        
+        filtered_files = []
+        for file_info in self.indexed_files:
+            if self.passes_filter(file_info):
+                self.add_file_to_model(file_info)
+                filtered_files.append(file_info)
+                
+        # Update status
+        visible_count = len(filtered_files)
+        total_count = len(self.indexed_files)
+        
+        if self.current_directory:
+            dir_name = Path(self.current_directory).name
+            if visible_count != total_count:
+                self.status_label.setText(f"Showing {visible_count} of {total_count} files in {dir_name}")
+            else:
+                self.status_label.setText(f"Found {total_count} files in {dir_name}")
         else:
-            # Clear name filter
-            self.file_model.setNameFilters([])
-            
-        # TODO: Implement type filtering based on type_filter combo
+            if visible_count != total_count:
+                self.status_label.setText(f"Showing {visible_count} of {total_count} files")
+            else:
+                self.status_label.setText(f"Found {total_count} files in watched directories")
         
     def setup_file_models(self):
         """Setup file list model"""
@@ -707,6 +716,134 @@ class FileBrowser(QWidget):
             self.status_label.setText(f"Watching {len(self.watched_directories)} directories")
         else:
             self.status_label.setText("No directories being watched - add some to get started")
+        
+        self.setup_file_models()
+        self.start_indexing()
+        
+    def passes_filter(self, file_info: Dict[str, Any]) -> bool:
+        """Check if file passes current filters"""
+        # Directory filter - show files in the selected directory
+        if self.current_directory:
+            file_dir = str(Path(file_info['path']).parent)
+            # Check if file is directly in the selected directory (not subdirectories)
+            if file_dir != self.current_directory:
+                return False
+        
+        # Text filter
+        if self.current_filter:
+            search_text = f"{file_info['name']} {file_info['description']}".lower()
+            metadata = self.metadata_manager.get_file_metadata(file_info['path'])
+            if metadata.get('tags'):
+                search_text += f" {' '.join(metadata['tags'])}"
+            if metadata.get('description'):
+                search_text += f" {metadata['description']}"
+                
+            if self.current_filter.lower() not in search_text:
+                return False
+                
+        # Type filter
+        type_filter = self.type_filter.currentText()
+        if type_filter != "All Types" and file_info['type'] != type_filter:
+            return False
+            
+        # Metadata filter
+        metadata_filter = self.metadata_filter.currentText()
+        if metadata_filter != "All Files":
+            metadata = self.metadata_manager.get_file_metadata(file_info['path'])
+            
+            if metadata_filter == "With Metadata":
+                if not (metadata.get('tags') or metadata.get('description') or metadata.get('category')):
+                    return False
+            elif metadata_filter == "Without Metadata":
+                if metadata.get('tags') or metadata.get('description') or metadata.get('category'):
+                    return False
+            elif metadata_filter == "Vector Indexed":
+                if not metadata.get('indexed_for_vector_search', False):
+                    return False
+            
+        return True
+        
+    def add_file_to_model(self, file_info: Dict[str, Any]):
+        """Add file to the file list model"""
+        # Get file metadata
+        metadata = self.metadata_manager.get_file_metadata(file_info['path'])
+        
+        # Create file icon based on type
+        file_icon = self.get_file_icon(file_info['type'])
+        
+        # Add to tree view
+        name_item = QStandardItem(file_info['name'])
+        name_item.setData(file_info['path'], Qt.ItemDataRole.UserRole)
+        name_item.setIcon(file_icon)
+        
+        # Enhanced tooltip with metadata
+        tooltip_parts = [
+            f"Path: {file_info['path']}",
+            f"Type: {file_info['description']}",
+            f"Size: {self.format_file_size(file_info['size'])}"
+        ]
+        if metadata.get('description'):
+            tooltip_parts.append(f"Description: {metadata['description']}")
+        if metadata.get('tags'):
+            tooltip_parts.append(f"Tags: {', '.join(metadata['tags'])}")
+        name_item.setToolTip('\n'.join(tooltip_parts))
+        
+        # Type item
+        type_item = QStandardItem(file_info['type'])
+        
+        # Size item
+        size_item = QStandardItem(self.format_file_size(file_info['size']))
+        size_item.setData(file_info['size'], Qt.ItemDataRole.UserRole)  # Store actual size for sorting
+        
+        # Tags item
+        tags_text = ', '.join(metadata.get('tags', []))
+        tags_item = QStandardItem(tags_text)
+        
+        # Add accessibility indicator
+        if not file_info['is_accessible']:
+            name_item.setForeground(Qt.GlobalColor.red)
+            name_item.setToolTip(f"{file_info['path']}\nAccess denied")
+            
+        self.file_model.appendRow([name_item, type_item, size_item, tags_item])
+        
+    def start_indexing(self):
+        """Start indexing files in watched directories"""
+        watched_dirs = self.config_manager.get("file_management.watched_directories", [])
+        supported_formats = self.config_manager.get("file_management.supported_formats", [])
+        
+        if not watched_dirs:
+            return
+            
+        # Stop existing indexer
+        if self.indexer_worker and self.indexer_worker.isRunning():
+            self.indexer_worker.stop()
+            self.indexer_worker.wait()
+            
+        # Clear existing files
+        self.file_model.clear()
+        self.file_model.setHorizontalHeaderLabels(['Name', 'Type', 'Size', 'Tags'])
+        self.indexed_files.clear()
+        
+        # Start new indexer
+        self.indexer_worker = FileIndexWorker(watched_dirs, supported_formats)
+        self.indexer_worker.file_indexed.connect(self.on_file_indexed)
+        self.indexer_worker.indexing_complete.connect(self.on_indexing_complete)
+        self.indexer_worker.start()
+        
+    def on_file_indexed(self, file_info: Dict[str, Any]):
+        """Handle newly indexed file"""
+        self.indexed_files.append(file_info)
+        
+        # Add to model if it passes current filter
+        if self.passes_filter(file_info):
+            self.add_file_to_model(file_info)
+            
+    def on_indexing_complete(self, total_files: int):
+        """Handle indexing completion"""
+        self.status_label.setText(f"Found {total_files} files in watched directories")
+        
+        # Sort the tree
+        self.file_list.sortByColumn(0, Qt.SortOrder.AscendingOrder)
             
     def add_directory(self):
         """Add directory to watch list with metadata collection"""
