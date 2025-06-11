@@ -184,6 +184,7 @@ class FileBrowser(QWidget):
         self.config_manager = config_manager
         self.metadata_manager = FileMetadataManager(config_manager)
         self.file_watcher = QFileSystemWatcher()
+        self.vector_engine = None
         
         # Current state
         self.watched_directories = []
@@ -194,6 +195,7 @@ class FileBrowser(QWidget):
         
         self.setup_ui()
         self.setup_connections()
+        self.load_vector_engine()
         self.load_watched_directories()
         
     def setup_ui(self):
@@ -605,6 +607,19 @@ class FileBrowser(QWidget):
         # File watcher
         self.file_watcher.directoryChanged.connect(self.on_directory_changed)
         
+    def load_vector_engine(self):
+        """Load vector search engine for automatic indexing"""
+        try:
+            from utils.vector_search import VectorSearchEngine
+            self.vector_engine = VectorSearchEngine(self.config_manager)
+            logger.info("Vector search engine loaded for file browser")
+        except ImportError:
+            logger.warning("Vector search dependencies not available")
+            self.vector_engine = None
+        except Exception as e:
+            logger.error(f"Failed to load vector search engine: {e}")
+            self.vector_engine = None
+        
     def load_watched_directories(self):
         """Load watched directories from config"""
         self.watched_directories = self.config_manager.get("file_management.watched_directories", [])
@@ -747,6 +762,9 @@ class FileBrowser(QWidget):
         """Handle newly indexed file"""
         self.indexed_files.append(file_info)
         
+        # Auto-index to vector database
+        self.auto_index_file(file_info)
+        
         # Add to model if it passes current filter
         if self.passes_filter(file_info):
             self.add_file_to_model(file_info)
@@ -791,6 +809,9 @@ class FileBrowser(QWidget):
             
             # Reload watched directories to show the new one
             self.load_watched_directories()
+            
+            # Auto-index the new directory
+            self.auto_index_new_directory(directory)
             
     def refresh(self):
         """Refresh the current directory view"""
@@ -856,12 +877,116 @@ class FileBrowser(QWidget):
         
             
                 
+    def auto_index_file(self, file_info: Dict[str, Any]):
+        """Automatically index new file to vector database"""
+        if not self.vector_engine:
+            return
+            
+        try:
+            file_path = file_info['path']
+            
+            # Check if file should be indexed (supported formats)
+            supported_formats = ['.txt', '.md', '.py', '.json', '.csv', '.sql', '.pdf', '.docx']
+            file_ext = Path(file_path).suffix.lower()
+            
+            if file_ext not in supported_formats:
+                return
+                
+            # Check if already indexed
+            indexed_docs = self.vector_engine.get_indexed_documents()
+            already_indexed = any(doc['file_path'] == file_path for doc in indexed_docs)
+            
+            if not already_indexed:
+                # Get metadata for the file
+                metadata = self.metadata_manager.get_file_metadata(file_path)
+                
+                # Determine fileset name from directory
+                directory_name = Path(file_path).parent.name
+                fileset_name = metadata.get('category') or directory_name
+                
+                # Index the file
+                success = self.vector_engine.index_document(
+                    file_path,
+                    fileset_name=fileset_name,
+                    fileset_description=metadata.get('description', ''),
+                    tags=metadata.get('tags', []),
+                    user_description=metadata.get('description', '')
+                )
+                
+                if success:
+                    logger.info(f"Auto-indexed file: {file_path}")
+                    # Update metadata to mark as indexed
+                    metadata['indexed_for_vector_search'] = True
+                    self.metadata_manager.set_file_metadata(file_path, metadata)
+                else:
+                    logger.warning(f"Failed to auto-index file: {file_path}")
+                    
+        except Exception as e:
+            logger.error(f"Error auto-indexing file {file_info.get('path', 'Unknown')}: {e}")
+    
     def on_directory_changed(self, path: str):
         """Handle directory changes from file watcher"""
         logger.info(f"Directory changed: {path}")
+        
+        # Trigger re-indexing of changed directory
+        self.auto_index_directory_changes(path)
+        
         # Refresh current view if we're viewing the changed directory
         if self.current_directory and Path(path) == Path(self.current_directory):
             self.refresh()
+            
+    def auto_index_directory_changes(self, directory_path: str):
+        """Auto-index new files detected in directory changes"""
+        if not self.vector_engine:
+            return
+            
+        try:
+            directory = Path(directory_path)
+            if not directory.exists():
+                return
+                
+            # Get current indexed files for this directory
+            indexed_docs = self.vector_engine.get_indexed_documents()
+            indexed_paths = {doc['file_path'] for doc in indexed_docs}
+            
+            # Check for new files
+            supported_formats = ['.txt', '.md', '.py', '.json', '.csv', '.sql']
+            new_files = []
+            
+            for file_path in directory.rglob('*'):
+                if (file_path.is_file() and 
+                    file_path.suffix.lower() in supported_formats and
+                    str(file_path) not in indexed_paths):
+                    new_files.append(file_path)
+                    
+            # Index new files
+            if new_files:
+                logger.info(f"Auto-indexing {len(new_files)} new files in {directory_path}")
+                
+                for file_path in new_files[:10]:  # Limit to 10 files per change event
+                    try:
+                        # Get metadata
+                        metadata = self.metadata_manager.get_file_metadata(str(file_path))
+                        
+                        # Index the file
+                        success = self.vector_engine.index_document(
+                            str(file_path),
+                            fileset_name=directory.name,
+                            fileset_description=f"Files from {directory_path}",
+                            tags=metadata.get('tags', []) + ['auto-indexed'],
+                            user_description=metadata.get('description', '')
+                        )
+                        
+                        if success:
+                            # Update metadata
+                            metadata['indexed_for_vector_search'] = True
+                            self.metadata_manager.set_file_metadata(str(file_path), metadata)
+                            
+                    except Exception as e:
+                        logger.error(f"Error auto-indexing new file {file_path}: {e}")
+                        
+        except Exception as e:
+            logger.error(f"Error processing directory changes for {directory_path}: {e}")
                 
     def show_file_details(self, file_path: str):
         """Show minimal file details in the compact sidebar"""
@@ -1053,6 +1178,21 @@ Directory: {file_info['directory']}
             self.file_metadata_changed.emit(file_path, metadata)
             
             self.status_label.setText(f"Updated metadata for '{Path(file_path).name}'")
+            
+            # Re-index file if vector search is available and metadata changed
+            if self.vector_engine and metadata.get('indexed_for_vector_search', False):
+                try:
+                    success = self.vector_engine.update_document_metadata(
+                        file_path,
+                        fileset_name=metadata.get('category'),
+                        fileset_description=metadata.get('description', ''),
+                        tags=metadata.get('tags', []),
+                        user_description=metadata.get('description', '')
+                    )
+                    if success:
+                        logger.info(f"Updated vector search metadata for: {file_path}")
+                except Exception as e:
+                    logger.error(f"Error updating vector search metadata: {e}")
 
 class FileMetadataDialog(QDialog):
     """Dialog for editing individual file metadata"""

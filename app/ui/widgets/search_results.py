@@ -295,9 +295,13 @@ class SearchWorker(QThread):
                     summary_parts.append(content)
                     enhanced_summary = '\n'.join(summary_parts)
                     
+                    # Determine if this is a dataset or file
+                    is_dataset = result.get('file_path', '').startswith('dataset://')
+                    source_type = 'Dataset' if is_dataset else 'Document'
+                    
                     transformed_results.append({
                         'title': result.get('title', 'Untitled'),
-                        'source_type': 'Document',
+                        'source_type': source_type,
                         'source_path': result.get('file_path', 'Unknown'),
                         'summary': enhanced_summary,
                         'owner': fileset_name,  # Use fileset name as owner
@@ -311,7 +315,8 @@ class SearchWorker(QThread):
                         'fileset_name': fileset_name,
                         'schema_info': schema_info,
                         'tags': tags,
-                        'user_description': user_description
+                        'user_description': user_description,
+                        'is_dataset': is_dataset
                     })
                     
             return transformed_results

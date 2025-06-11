@@ -202,9 +202,11 @@ class DatasetBrowser(QWidget):
         self.all_datasets = []
         self.filtered_datasets = []
         self.current_filters = {}
+        self.vector_engine = None
         
         self.setup_ui()
         self.setup_connections()
+        self.load_vector_engine()
         self.load_datasets()
         
     def setup_ui(self):
@@ -307,6 +309,19 @@ class DatasetBrowser(QWidget):
         self.type_filter.currentTextChanged.connect(self.apply_filters)
         self.access_filter.currentTextChanged.connect(self.apply_filters)
         
+    def load_vector_engine(self):
+        """Load vector search engine for automatic indexing"""
+        try:
+            from utils.vector_search import VectorSearchEngine
+            self.vector_engine = VectorSearchEngine(self.config_manager)
+            logger.info("Vector search engine loaded for dataset browser")
+        except ImportError:
+            logger.warning("Vector search dependencies not available")
+            self.vector_engine = None
+        except Exception as e:
+            logger.error(f"Failed to load vector search engine: {e}")
+            self.vector_engine = None
+        
     def load_datasets(self):
         """Load datasets from configuration and external sources"""
         # Load registered datasets
@@ -375,6 +390,10 @@ class DatasetBrowser(QWidget):
         ]
         
         self.all_datasets = registered + mock_datasets
+        
+        # Auto-index new datasets to vector database
+        self.auto_index_datasets(mock_datasets)
+        
         self.apply_filters()
     
     def apply_dataset_filters(self, filters: Dict[str, Any]):
@@ -513,6 +532,46 @@ class DatasetBrowser(QWidget):
                 f"Access request for '{dataset_info['name']}' has been sent to {dataset_info['owner']}."
             )
             
+    def auto_index_datasets(self, datasets):
+        """Automatically index new datasets to vector database"""
+        if not self.vector_engine:
+            return
+            
+        for dataset in datasets:
+            try:
+                # Create virtual document for dataset
+                dataset_id = f"dataset://{dataset['name']}"
+                
+                # Check if already indexed
+                indexed_docs = self.vector_engine.get_indexed_documents()
+                already_indexed = any(doc['file_path'] == dataset_id for doc in indexed_docs)
+                
+                if not already_indexed:
+                    # Index the dataset as a virtual document
+                    success = self.vector_engine.index_document(
+                        dataset_id,
+                        fileset_name=dataset['name'],
+                        fileset_description=dataset.get('description', ''),
+                        tags=dataset.get('tags', []),
+                        user_description=f"""
+Dataset: {dataset['name']}
+Type: {dataset.get('type', 'Unknown')}
+Description: {dataset.get('description', '')}
+Owner: {dataset.get('owner', 'Unknown')}
+Source: {dataset.get('source', '')}
+Access Level: {dataset.get('access_level', 'Unknown')}
+Row Count: {dataset.get('row_count', 'Unknown')}
+                        """.strip()
+                    )
+                    
+                    if success:
+                        logger.info(f"Auto-indexed dataset: {dataset['name']}")
+                    else:
+                        logger.warning(f"Failed to auto-index dataset: {dataset['name']}")
+                        
+            except Exception as e:
+                logger.error(f"Error auto-indexing dataset {dataset.get('name', 'Unknown')}: {e}")
+    
     def refresh(self):
         """Refresh dataset list"""
         self.load_datasets()

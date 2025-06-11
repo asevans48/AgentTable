@@ -10,6 +10,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFont, QAction, QPixmap, QPainter, QPen, QColor, QIcon
+from pathlib import Path
 
 from ui.sections.file_browser import FileBrowser
 from ui.sections.dataset_browser import DatasetBrowser
@@ -336,6 +337,46 @@ class MainWindow(QMainWindow):
         
         return panel
         
+    def auto_index_new_directory(self, directory_path: str):
+        """Auto-index files in a newly added directory"""
+        if not self.vector_engine:
+            return
+            
+        try:
+            from PyQt6.QtCore import QTimer
+            
+            # Delay indexing to allow UI to update
+            def delayed_index():
+                try:
+                    logger.info(f"Starting auto-indexing of new directory: {directory_path}")
+                    
+                    # Get directory metadata if available
+                    dir_name = Path(directory_path).name
+                    
+                    # Index the directory with basic metadata
+                    results = self.vector_engine.index_directory(
+                        directory_path,
+                        fileset_name=dir_name,
+                        fileset_description=f"Auto-indexed files from {directory_path}",
+                        tags=['auto-indexed', 'directory'],
+                        max_files=100  # Limit for initial auto-indexing
+                    )
+                    
+                    if results['indexed_files'] > 0:
+                        logger.info(f"Auto-indexed {results['indexed_files']} files from new directory: {directory_path}")
+                        self.status_label.setText(f"Auto-indexed {results['indexed_files']} files from '{dir_name}'")
+                    else:
+                        logger.info(f"No files auto-indexed from directory: {directory_path}")
+                        
+                except Exception as e:
+                    logger.error(f"Error during auto-indexing of directory {directory_path}: {e}")
+            
+            # Start indexing after 2 seconds to allow UI to settle
+            QTimer.singleShot(2000, delayed_index)
+            
+        except Exception as e:
+            logger.error(f"Error setting up auto-indexing for directory {directory_path}: {e}")
+        
     def create_center_panel(self):
         """Create the main center content panel"""
         panel = QFrame()
@@ -487,6 +528,10 @@ class MainWindow(QMainWindow):
         self.file_browser.file_selected.connect(self.on_file_selected)
         self.dataset_browser.dataset_selected.connect(self.on_dataset_selected)
         
+        # Connect vector database update signals
+        self.file_browser.file_metadata_changed.connect(self.on_file_metadata_changed)
+        self.file_browser.directory_added.connect(self.on_directory_added)
+        
     def on_section_clicked(self, item, column):
         """Handle section tree item clicks"""
         section_text = item.text(0)
@@ -517,6 +562,14 @@ class MainWindow(QMainWindow):
     def on_dataset_selected(self, dataset_info):
         """Handle dataset selection from dataset browser"""
         self.status_bar.showMessage(f"Selected dataset: {dataset_info.get('name', 'Unknown')}")
+        
+    def on_file_metadata_changed(self, file_path, metadata):
+        """Handle file metadata changes"""
+        self.status_bar.showMessage(f"Updated metadata for: {Path(file_path).name}")
+        
+    def on_directory_added(self, directory_path):
+        """Handle new directory being added"""
+        self.status_bar.showMessage(f"Added directory: {Path(directory_path).name} - Auto-indexing in progress...")
         
     def show_settings(self):
         """Show settings dialog"""
