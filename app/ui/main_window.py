@@ -637,6 +637,18 @@ class MainWindow(QMainWindow):
         
         dialog.exec()
     
+    def show_cloud_auth(self):
+        """Show cloud authentication dialog"""
+        from ui.dialogs.cloud_auth_dialog import CloudAuthDialog
+        
+        dialog = CloudAuthDialog(self)
+        dialog.credentials_updated.connect(self.on_cloud_credentials_updated)
+        dialog.exec()
+    
+    def on_cloud_credentials_updated(self):
+        """Handle cloud credentials update"""
+        self.status_bar.showMessage("Cloud credentials updated successfully")
+    
     def logout(self):
         """Logout and return to login screen"""
         from PyQt6.QtWidgets import QMessageBox
