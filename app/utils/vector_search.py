@@ -440,7 +440,7 @@ class VectorSearchEngine:
                 headers = rows[0] if rows else []
                 sample_data = rows[1:min(6, len(rows))]  # First 5 data rows
                 
-                # Create structured summary
+                # Create structured summary with enhanced column information
                 summary_parts = [
                     f"CSV FILE: {file_path.name}",
                     f"COLUMNS ({len(headers)}): {', '.join(headers[:10])}{'...' if len(headers) > 10 else ''}",
@@ -449,8 +449,30 @@ class VectorSearchEngine:
                     ""
                 ]
                 
+                # Add detailed column analysis for better searchability
+                if headers:
+                    summary_parts.append("COLUMN DETAILS:")
+                    for i, header in enumerate(headers[:10]):  # Analyze first 10 columns
+                        col_info = f"  {header}"
+                        
+                        # Analyze sample data for this column if available
+                        if sample_data and len(sample_data) > 0:
+                            col_values = []
+                            for row in sample_data[:3]:
+                                if i < len(row) and row[i]:
+                                    col_values.append(str(row[i])[:15])
+                            
+                            if col_values:
+                                col_info += f" (examples: {', '.join(col_values)})"
+                        
+                        summary_parts.append(col_info)
+                    
+                    if len(headers) > 10:
+                        summary_parts.append(f"  ... and {len(headers) - 10} more columns")
+                
                 # Add sample data
                 if sample_data:
+                    summary_parts.append("")
                     summary_parts.append("SAMPLE DATA:")
                     for i, row in enumerate(sample_data[:3]):  # Show first 3 rows
                         row_preview = [str(cell)[:20] + "..." if len(str(cell)) > 20 else str(cell) for cell in row[:5]]
@@ -747,6 +769,112 @@ class VectorSearchEngine:
                 
         except Exception as e:
             return self._create_file_summary(file_path, f"Generic sampling error: {str(e)}")
+    
+    def _extract_content_metadata(self, content: str, file_type: str) -> Dict[str, Any]:
+        """Extract additional metadata from content for enhanced indexing"""
+        metadata = {
+            'tags': [],
+            'description': '',
+            'columns': [],
+            'keywords': []
+        }
+        
+        try:
+            if file_type == '.csv':
+                # Extract CSV column information for better searchability
+                lines = content.split('\n')
+                if lines and 'COLUMNS' in content:
+                    # Find column information in the content
+                    for line in lines:
+                        if line.startswith('COLUMNS'):
+                            # Extract column names
+                            columns_part = line.split(':', 1)[1] if ':' in line else line
+                            # Remove count information and clean up
+                            columns_part = columns_part.split('(')[0] if '(' in columns_part else columns_part
+                            columns = [col.strip() for col in columns_part.split(',')]
+                            metadata['columns'] = columns
+                            
+                            # Add column names as searchable keywords
+                            metadata['keywords'].extend(columns)
+                            
+                            # Generate tags based on column names
+                            for col in columns:
+                                col_lower = col.lower()
+                                if any(keyword in col_lower for keyword in ['income', 'salary', 'wage', 'pay']):
+                                    metadata['tags'].append('financial')
+                                if any(keyword in col_lower for keyword in ['name', 'customer', 'user', 'person']):
+                                    metadata['tags'].append('personal')
+                                if any(keyword in col_lower for keyword in ['date', 'time', 'created', 'updated']):
+                                    metadata['tags'].append('temporal')
+                                if any(keyword in col_lower for keyword in ['id', 'key', 'index']):
+                                    metadata['tags'].append('identifier')
+                                if any(keyword in col_lower for keyword in ['address', 'location', 'city', 'state']):
+                                    metadata['tags'].append('geographic')
+                            
+                            # Create description based on columns
+                            if len(columns) > 0:
+                                metadata['description'] = f"CSV file with {len(columns)} columns: {', '.join(columns[:5])}{'...' if len(columns) > 5 else ''}"
+                            break
+                            
+            elif file_type == '.json':
+                # Extract JSON structure information
+                if 'KEYS:' in content:
+                    for line in content.split('\n'):
+                        if line.strip().startswith('KEYS:'):
+                            keys_part = line.split(':', 1)[1] if ':' in line else line
+                            keys = [key.strip() for key in keys_part.split(',')]
+                            metadata['keywords'].extend(keys)
+                            
+                            # Generate tags based on JSON keys
+                            for key in keys:
+                                key_lower = key.lower()
+                                if any(keyword in key_lower for keyword in ['config', 'setting', 'option']):
+                                    metadata['tags'].append('configuration')
+                                if any(keyword in key_lower for keyword in ['data', 'record', 'item']):
+                                    metadata['tags'].append('data')
+                                if any(keyword in key_lower for keyword in ['api', 'endpoint', 'service']):
+                                    metadata['tags'].append('api')
+                            break
+                            
+            elif file_type == '.py':
+                # Extract Python code information
+                if 'CLASSES' in content:
+                    for line in content.split('\n'):
+                        if 'CLASSES' in line and ':' in line:
+                            classes_part = line.split(':', 1)[1]
+                            classes = [cls.strip() for cls in classes_part.split(',')]
+                            metadata['keywords'].extend(classes)
+                            metadata['tags'].append('object-oriented')
+                            break
+                            
+                if 'FUNCTIONS' in content:
+                    for line in content.split('\n'):
+                        if 'FUNCTIONS' in line and ':' in line:
+                            functions_part = line.split(':', 1)[1]
+                            functions = [func.strip() for func in functions_part.split(',')]
+                            metadata['keywords'].extend(functions[:10])  # Limit to first 10
+                            metadata['tags'].append('functional')
+                            break
+                            
+            # Extract general keywords from content
+            content_lower = content.lower()
+            
+            # Look for common data-related terms
+            data_keywords = ['income', 'revenue', 'sales', 'profit', 'customer', 'user', 'transaction', 
+                           'order', 'product', 'service', 'account', 'balance', 'payment', 'invoice']
+            
+            for keyword in data_keywords:
+                if keyword in content_lower:
+                    metadata['keywords'].append(keyword)
+                    
+            # Remove duplicates from tags and keywords
+            metadata['tags'] = list(set(metadata['tags']))
+            metadata['keywords'] = list(set(metadata['keywords']))
+            
+        except Exception as e:
+            logger.warning(f"Error extracting content metadata: {e}")
+            
+        return metadata
         
     def _chunk_text(self, text: str) -> List[str]:
         """Split structured content into logical chunks focusing on sections and metadata"""
@@ -867,32 +995,37 @@ class VectorSearchEngine:
         
     def index_document(self, file_path: str, fileset_name: str = None, fileset_description: str = None, 
                       schema_info: str = None, tags: List[str] = None, user_description: str = None) -> bool:
-        """Index a single document with enhanced metadata and duplicate prevention"""
+        """Index a single document with enhanced metadata and duplicate prevention using fully qualified paths"""
         try:
-            # Normalize file path to prevent duplicates
+            # Create fully qualified unique key to prevent duplicates
             if file_path.startswith("dataset://"):
-                normalized_path = file_path  # Keep dataset paths as-is
+                # For datasets, use the full dataset URI as unique key
+                unique_key = file_path
                 file_hash = hashlib.md5(file_path.encode()).hexdigest()
                 content = user_description or f"Virtual dataset document: {file_path}"
                 file_size = len(content.encode('utf-8'))
                 file_type = "dataset"
                 title = file_path.replace("dataset://", "")
             else:
-                # Normalize file paths to absolute paths to prevent duplicates
-                normalized_path = str(Path(file_path).resolve())
-                file_hash = self._get_file_hash(normalized_path)
+                # For files, always use absolute path as unique key
+                file_path_obj = Path(file_path)
+                if not file_path_obj.is_absolute():
+                    file_path_obj = file_path_obj.resolve()
+                unique_key = str(file_path_obj).replace('\\', '/')  # Normalize path separators
                 
-                # Extract text content
-                content = self._extract_text_content(normalized_path)
+                file_hash = self._get_file_hash(str(file_path_obj))
+                
+                # Extract text content with enhanced metadata extraction
+                content = self._extract_text_content(str(file_path_obj))
                 if not content.strip():
-                    logger.warning(f"No content extracted from {normalized_path}")
+                    logger.warning(f"No content extracted from {unique_key}")
                     return False
                     
                 # Get file metadata
-                file_stat = Path(normalized_path).stat()
+                file_stat = file_path_obj.stat()
                 file_size = file_stat.st_size
-                file_type = Path(normalized_path).suffix.lower()
-                title = Path(normalized_path).stem
+                file_type = file_path_obj.suffix.lower()
+                title = file_path_obj.stem
             
             # Check database exists
             db_path_str = str(self.vector_db_path.resolve())
@@ -903,12 +1036,12 @@ class VectorSearchEngine:
             conn = sqlite3.connect(db_path_str)
             cursor = conn.cursor()
             
-            # Check for existing document with comprehensive duplicate detection
+            # Check for existing document using unique key for comprehensive duplicate detection
             cursor.execute("""
                 SELECT id, file_hash, indexed_at, fileset_name, fileset_description, 
                        schema_info, tags, user_description, chunk_count
                 FROM documents WHERE file_path = ?
-            """, (normalized_path,))
+            """, (unique_key,))
             existing_doc = cursor.fetchone()
             
             # Determine if we need to update or create new
@@ -943,46 +1076,67 @@ class VectorSearchEngine:
                 
                 # If no changes needed, return success
                 if not needs_content_reindex and not needs_metadata_update:
-                    logger.debug(f"Document {normalized_path} already up-to-date")
+                    logger.debug(f"Document {unique_key} already up-to-date")
                     conn.close()
                     return True
             else:
                 # New document
                 needs_content_reindex = True
                 needs_metadata_update = True
-                logger.info(f"New document to index: {normalized_path}")
+                logger.info(f"New document to index: {unique_key}")
             
             # Prepare metadata with intelligent merging
             content_preview = content[:200] + "..." if len(content) > 200 else content
             
-            # Detect schema for structured files
-            detected_schema = detect_schema(normalized_path, content)
+            # Detect schema for structured files with enhanced metadata extraction
+            detected_schema = detect_schema(unique_key, content)
+            
+            # Extract additional metadata from content for better indexing
+            extracted_metadata = self._extract_content_metadata(content, file_type)
             
             # Merge metadata intelligently
             if existing_doc and needs_metadata_update:
                 # Merge metadata - prefer new values but keep existing if new is empty
-                final_fileset = fileset_name or existing_doc[3] or generate_fileset_name(normalized_path)
+                final_fileset = fileset_name or existing_doc[3] or generate_fileset_name(unique_key)
                 final_fileset_desc = fileset_description or existing_doc[4]
                 final_schema = schema_info or existing_doc[5] or detected_schema
                 
-                # Merge tags - combine existing and new tags
+                # Merge tags - combine existing, new, and extracted tags
                 existing_tags_list = existing_doc[6].split(',') if existing_doc[6] else []
                 new_tags_list = tags if tags else []
-                merged_tags = list(set(existing_tags_list + new_tags_list))  # Remove duplicates
+                extracted_tags_list = extracted_metadata.get('tags', [])
+                merged_tags = list(set(existing_tags_list + new_tags_list + extracted_tags_list))
                 merged_tags = [tag.strip() for tag in merged_tags if tag.strip()]  # Clean empty tags
                 final_tags = merged_tags
                 
-                final_user_desc = user_description or existing_doc[7]
+                # Enhance user description with extracted metadata
+                base_desc = user_description or existing_doc[7] or ""
+                extracted_desc = extracted_metadata.get('description', "")
+                if extracted_desc and extracted_desc not in base_desc:
+                    final_user_desc = f"{base_desc}\n\n{extracted_desc}".strip()
+                else:
+                    final_user_desc = base_desc
                 
-                logger.info(f"Merging metadata for {normalized_path}: "
+                logger.info(f"Merging metadata for {unique_key}: "
                           f"fileset='{final_fileset}', tags={len(final_tags)}")
             else:
                 # New document or no metadata to merge
-                final_fileset = fileset_name or generate_fileset_name(normalized_path)
+                final_fileset = fileset_name or generate_fileset_name(unique_key)
                 final_fileset_desc = fileset_description
                 final_schema = schema_info or detected_schema
-                final_tags = tags if tags else []
-                final_user_desc = user_description
+                
+                # Combine provided tags with extracted tags
+                provided_tags = tags if tags else []
+                extracted_tags = extracted_metadata.get('tags', [])
+                final_tags = list(set(provided_tags + extracted_tags))
+                
+                # Enhance user description with extracted metadata
+                base_desc = user_description or ""
+                extracted_desc = extracted_metadata.get('description', "")
+                if extracted_desc and extracted_desc not in base_desc:
+                    final_user_desc = f"{base_desc}\n\n{extracted_desc}".strip()
+                else:
+                    final_user_desc = base_desc
             
             # Convert tags to string
             tags_str = ','.join(final_tags) if final_tags else ''
@@ -1008,19 +1162,19 @@ class VectorSearchEngine:
                       final_fileset, final_fileset_desc, final_schema, tags_str, 
                       final_user_desc, datetime.now(), document_id))
                 
-                logger.info(f"Updated existing document record for {normalized_path}")
+                logger.info(f"Updated existing document record for {unique_key}")
             else:
-                # Insert new document
+                # Insert new document with unique key
                 cursor.execute("""
                     INSERT INTO documents 
                     (file_path, file_hash, title, content_preview, file_type, file_size, 
                      fileset_name, fileset_description, schema_info, tags, user_description, updated_at)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, (normalized_path, file_hash, title, content_preview, file_type, file_size,
+                """, (unique_key, file_hash, title, content_preview, file_type, file_size,
                       final_fileset, final_fileset_desc, final_schema, tags_str, final_user_desc, datetime.now()))
                 
                 document_id = cursor.lastrowid
-                logger.info(f"Created new document record for {normalized_path}")
+                logger.info(f"Created new document record for {unique_key}")
             
             # Handle content re-indexing if needed
             if needs_content_reindex:
@@ -1076,7 +1230,7 @@ class VectorSearchEngine:
                     WHERE id = ?
                 """, (datetime.now(), len(chunks), document_id))
                 
-                logger.info(f"Re-indexed content for {normalized_path} with {len(chunks)} chunks")
+                logger.info(f"Re-indexed content for {unique_key} with {len(chunks)} chunks")
             else:
                 # Just update metadata in existing chunks if metadata changed
                 if needs_metadata_update and existing_doc:
@@ -1103,13 +1257,13 @@ class VectorSearchEngine:
                         except Exception as e:
                             logger.error(f"Error updating embedding for chunk {embedding_id}: {e}")
                     
-                    logger.info(f"Updated metadata for {len(existing_chunks)} chunks in {normalized_path}")
+                    logger.info(f"Updated metadata for {len(existing_chunks)} chunks in {unique_key}")
             
             conn.commit()
             conn.close()
             
             action = "re-indexed" if needs_content_reindex else "updated metadata for"
-            logger.info(f"Successfully {action} document {normalized_path} in fileset '{final_fileset}'")
+            logger.info(f"Successfully {action} document {unique_key} in fileset '{final_fileset}'")
             return True
             
         except Exception as e:
@@ -1240,15 +1394,20 @@ class VectorSearchEngine:
     def update_document_metadata(self, file_path: str, fileset_name: str = None, 
                                fileset_description: str = None, tags: List[str] = None,
                                user_description: str = None) -> bool:
-        """Update metadata for an existing document using the main indexing method"""
+        """Update metadata for an existing document using the main indexing method with unique key normalization"""
         try:
-            # Normalize file path
-            if not file_path.startswith("dataset://"):
-                file_path = str(Path(file_path).resolve())
+            # Normalize file path to match the unique key system
+            if file_path.startswith("dataset://"):
+                normalized_path = file_path
+            else:
+                file_path_obj = Path(file_path)
+                if not file_path_obj.is_absolute():
+                    file_path_obj = file_path_obj.resolve()
+                normalized_path = str(file_path_obj).replace('\\', '/')
             
             # Use the main index_document method which now handles metadata merging
             return self.index_document(
-                file_path=file_path,
+                file_path=normalized_path,
                 fileset_name=fileset_name,
                 fileset_description=fileset_description,
                 tags=tags,
@@ -1528,7 +1687,7 @@ class VectorSearchEngine:
             raise
             
     def remove_duplicate_documents(self) -> Dict[str, Any]:
-        """Remove duplicate documents based on file paths and merge their metadata"""
+        """Remove duplicate documents based on normalized file paths and merge their metadata"""
         try:
             db_path_str = str(self.vector_db_path.resolve())
             if not Path(db_path_str).exists():
@@ -1537,29 +1696,44 @@ class VectorSearchEngine:
             conn = sqlite3.connect(db_path_str)
             cursor = conn.cursor()
             
-            # Find duplicate file paths
-            cursor.execute("""
-                SELECT file_path, COUNT(*) as count, GROUP_CONCAT(id) as ids
-                FROM documents 
-                GROUP BY file_path 
-                HAVING COUNT(*) > 1
-            """)
+            # Find potential duplicates by normalizing paths
+            cursor.execute("SELECT id, file_path FROM documents")
+            all_docs = cursor.fetchall()
             
-            duplicates = cursor.fetchall()
+            # Group documents by normalized paths
+            path_groups = {}
+            for doc_id, file_path in all_docs:
+                # Normalize the path for comparison
+                if file_path.startswith("dataset://"):
+                    normalized = file_path
+                else:
+                    try:
+                        normalized = str(Path(file_path).resolve()).replace('\\', '/')
+                    except:
+                        normalized = file_path.replace('\\', '/')
+                
+                if normalized not in path_groups:
+                    path_groups[normalized] = []
+                path_groups[normalized].append((doc_id, file_path))
+            
             removed_count = 0
             errors = []
             
-            for file_path, count, ids_str in duplicates:
+            # Process groups with duplicates
+            for normalized_path, docs in path_groups.items():
+                if len(docs) <= 1:
+                    continue  # No duplicates
+                
                 try:
-                    ids = [int(id_str) for id_str in ids_str.split(',')]
+                    doc_ids = [doc[0] for doc in docs]
                     
                     # Get all duplicate records
                     cursor.execute("""
-                        SELECT id, fileset_name, fileset_description, schema_info, tags, 
-                               user_description, indexed_at, chunk_count
+                        SELECT id, file_path, fileset_name, fileset_description, schema_info, tags, 
+                               user_description, indexed_at, chunk_count, updated_at
                         FROM documents WHERE id IN ({})
-                        ORDER BY updated_at DESC
-                    """.format(','.join('?' * len(ids))), ids)
+                        ORDER BY updated_at DESC, indexed_at DESC
+                    """.format(','.join('?' * len(doc_ids))), doc_ids)
                     
                     records = cursor.fetchall()
                     
@@ -1572,31 +1746,35 @@ class VectorSearchEngine:
                     merged_description = None
                     merged_schema = None
                     merged_tags = set()
-                    merged_user_desc = None
+                    merged_user_desc_parts = []
                     
                     for record in records:
-                        if record[1] and not merged_fileset:  # fileset_name
-                            merged_fileset = record[1]
-                        if record[2] and not merged_description:  # fileset_description
-                            merged_description = record[2]
-                        if record[3] and not merged_schema:  # schema_info
-                            merged_schema = record[3]
-                        if record[4]:  # tags
-                            merged_tags.update(record[4].split(','))
-                        if record[5] and not merged_user_desc:  # user_description
-                            merged_user_desc = record[5]
+                        if record[2] and not merged_fileset:  # fileset_name
+                            merged_fileset = record[2]
+                        if record[3] and not merged_description:  # fileset_description
+                            merged_description = record[3]
+                        if record[4] and not merged_schema:  # schema_info
+                            merged_schema = record[4]
+                        if record[5]:  # tags
+                            merged_tags.update([tag.strip() for tag in record[5].split(',') if tag.strip()])
+                        if record[6]:  # user_description
+                            desc = record[6].strip()
+                            if desc and desc not in merged_user_desc_parts:
+                                merged_user_desc_parts.append(desc)
+                    
+                    # Combine user descriptions
+                    merged_user_desc = '\n\n'.join(merged_user_desc_parts) if merged_user_desc_parts else None
                     
                     # Clean and merge tags
-                    merged_tags = [tag.strip() for tag in merged_tags if tag.strip()]
-                    merged_tags_str = ','.join(merged_tags)
+                    merged_tags_str = ','.join(sorted(merged_tags)) if merged_tags else ''
                     
-                    # Update the kept record with merged metadata
+                    # Update the kept record with merged metadata and normalized path
                     cursor.execute("""
                         UPDATE documents 
-                        SET fileset_name = ?, fileset_description = ?, schema_info = ?, 
+                        SET file_path = ?, fileset_name = ?, fileset_description = ?, schema_info = ?, 
                             tags = ?, user_description = ?, updated_at = ?
                         WHERE id = ?
-                    """, (merged_fileset, merged_description, merged_schema, 
+                    """, (normalized_path, merged_fileset, merged_description, merged_schema, 
                           merged_tags_str, merged_user_desc, datetime.now(), keep_id))
                     
                     # Remove duplicate records (except the one we're keeping)
@@ -1610,17 +1788,20 @@ class VectorSearchEngine:
                         for (embedding_id,) in embeddings:
                             embedding_file = self.embeddings_path / f"{embedding_id}.npy"
                             if embedding_file.exists():
-                                embedding_file.unlink()
+                                try:
+                                    embedding_file.unlink()
+                                except Exception as e:
+                                    logger.warning(f"Failed to delete embedding {embedding_id}: {e}")
                         
                         cursor.execute("DELETE FROM chunks WHERE document_id = ?", (remove_id,))
                         cursor.execute("DELETE FROM documents WHERE id = ?", (remove_id,))
                         
                         removed_count += 1
                     
-                    logger.info(f"Merged {count} duplicates for {file_path}, kept record {keep_id}")
+                    logger.info(f"Merged {len(docs)} duplicates for {normalized_path}, kept record {keep_id}")
                     
                 except Exception as e:
-                    error_msg = f"Error processing duplicates for {file_path}: {str(e)}"
+                    error_msg = f"Error processing duplicates for {normalized_path}: {str(e)}"
                     errors.append(error_msg)
                     logger.error(error_msg)
             
