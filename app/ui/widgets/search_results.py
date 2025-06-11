@@ -202,11 +202,12 @@ class SearchWorker(QThread):
     error_occurred = pyqtSignal(str)  # error message
     progress_updated = pyqtSignal(int)  # progress percentage
     
-    def __init__(self, query: str, search_type: str, config_manager):
+    def __init__(self, query: str, search_type: str, config_manager, filters: dict = None):
         super().__init__()
         self.query = query
         self.search_type = search_type
         self.config_manager = config_manager
+        self.filters = filters or {}
         
     def run(self):
         """Run the search in background"""
@@ -280,6 +281,10 @@ class SearchWorker(QThread):
                     from pathlib import Path
                     file_name = Path(result.get('file_path', 'Unknown')).name
                         
+                    # Apply filters before adding to results
+                    if not self.passes_filters(result):
+                        continue
+                    
                     # Get enhanced metadata from vector search result
                     fileset_name = result.get('fileset_name', 'Unknown Dataset')
                     schema_info = result.get('schema_info', '')
@@ -362,6 +367,44 @@ class SearchWorker(QThread):
         """Perform general search across all sources"""
         # Placeholder implementation
         return []
+        
+    def passes_filters(self, result: Dict[str, Any]) -> bool:
+        """Check if result passes the applied filters"""
+        if not self.filters:
+            return True
+            
+        # Get file metadata for filtering
+        file_path = result.get('file_path', '')
+        if not file_path:
+            return True
+            
+        # Get metadata from config
+        file_metadata = self.config_manager.get("file_management.file_metadata", {})
+        metadata = file_metadata.get(file_path, {})
+        
+        # Apply tags filter
+        if 'tags' in self.filters:
+            filter_tag = self.filters['tags'].lower()
+            file_tags = [tag.lower() for tag in metadata.get('tags', [])]
+            # Also check tags from vector search result
+            result_tags = result.get('tags', [])
+            if isinstance(result_tags, str):
+                result_tags = result_tags.split(',')
+            result_tags = [tag.strip().lower() for tag in result_tags if tag.strip()]
+            all_tags = file_tags + result_tags
+            
+            if filter_tag not in all_tags:
+                return False
+        
+        # Apply folder filter
+        if 'folder' in self.filters:
+            filter_folder = self.filters['folder'].lower()
+            from pathlib import Path
+            file_folder = Path(file_path).parent.name.lower()
+            if filter_folder not in file_folder:
+                return False
+                
+        return True
 
 class SearchResults(QWidget):
     """Search results display widget"""
@@ -486,17 +529,27 @@ class SearchResults(QWidget):
         if not query.strip():
             return
             
+        # Parse enhanced query for filters
+        parsed_query, filters = self.parse_enhanced_query(query)
+        
         # Clear previous results
         self.clear_results()
         
         # Show progress
         self.progress_bar.setVisible(True)
         self.progress_bar.setValue(0)
-        self.status_label.setText(f"Searching for: {query}")
+        
+        # Update status with filters if present
+        display_query = parsed_query if parsed_query else query
+        status_text = f"Searching for: {display_query}"
+        if filters:
+            filter_text = ", ".join([f"{k}: {v}" for k, v in filters.items()])
+            status_text += f" ({filter_text})"
+        self.status_label.setText(status_text)
         self.sort_combo.setVisible(False)
         
-        # Start background search
-        self.search_worker = SearchWorker(query, search_type, self.config_manager)
+        # Start background search with filters
+        self.search_worker = SearchWorker(parsed_query, search_type, self.config_manager, filters)
         self.search_worker.results_ready.connect(self.on_results_ready)
         self.search_worker.error_occurred.connect(self.on_search_error)
         self.search_worker.progress_updated.connect(self.progress_bar.setValue)
@@ -618,3 +671,27 @@ class SearchResults(QWidget):
             sorted_results = self.current_results
             
         self.display_results(sorted_results)
+        
+    def parse_enhanced_query(self, query: str) -> tuple[str, dict]:
+        """Parse enhanced query to extract filters"""
+        filters = {}
+        remaining_query_parts = []
+        
+        # Split query into parts
+        parts = query.split()
+        
+        for part in parts:
+            if ':' in part:
+                key, value = part.split(':', 1)
+                if key.lower() in ['tags', 'tag']:
+                    filters['tags'] = value
+                elif key.lower() in ['folder', 'dir', 'directory']:
+                    filters['folder'] = value
+                else:
+                    # Not a recognized filter, keep as part of query
+                    remaining_query_parts.append(part)
+            else:
+                remaining_query_parts.append(part)
+        
+        cleaned_query = ' '.join(remaining_query_parts)
+        return cleaned_query, filters
