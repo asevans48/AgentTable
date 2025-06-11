@@ -1063,7 +1063,7 @@ class VectorSearchEngine:
                 # Check if content changed (needs re-indexing)
                 if existing_hash != file_hash or not existing_indexed_at:
                     needs_content_reindex = True
-                    logger.info(f"Content changed for {normalized_path}, will re-index")
+                    logger.info(f"Content changed for {unique_key}, will re-index")
                 
                 # Check if metadata changed (needs metadata merge)
                 if (fileset_name and fileset_name != existing_fileset) or \
@@ -1072,7 +1072,7 @@ class VectorSearchEngine:
                    (tags and ','.join(tags) != existing_tags) or \
                    (user_description and user_description != existing_user_desc):
                     needs_metadata_update = True
-                    logger.info(f"Metadata changed for {normalized_path}, will merge")
+                    logger.info(f"Metadata changed for {unique_key}, will merge")
                 
                 # If no changes needed, return success
                 if not needs_content_reindex and not needs_metadata_update:
