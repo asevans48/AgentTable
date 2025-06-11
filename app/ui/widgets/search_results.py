@@ -368,43 +368,6 @@ class SearchWorker(QThread):
         # Placeholder implementation
         return []
         
-    def passes_filters(self, result: Dict[str, Any]) -> bool:
-        """Check if result passes the applied filters"""
-        if not self.filters:
-            return True
-            
-        # Get file metadata for filtering
-        file_path = result.get('file_path', '')
-        if not file_path:
-            return True
-            
-        # Get metadata from config
-        file_metadata = self.config_manager.get("file_management.file_metadata", {})
-        metadata = file_metadata.get(file_path, {})
-        
-        # Apply tags filter
-        if 'tags' in self.filters:
-            filter_tag = self.filters['tags'].lower()
-            file_tags = [tag.lower() for tag in metadata.get('tags', [])]
-            # Also check tags from vector search result
-            result_tags = result.get('tags', [])
-            if isinstance(result_tags, str):
-                result_tags = result_tags.split(',')
-            result_tags = [tag.strip().lower() for tag in result_tags if tag.strip()]
-            all_tags = file_tags + result_tags
-            
-            if filter_tag not in all_tags:
-                return False
-        
-        # Apply folder filter
-        if 'folder' in self.filters:
-            filter_folder = self.filters['folder'].lower()
-            from pathlib import Path
-            file_folder = Path(file_path).parent.name.lower()
-            if filter_folder not in file_folder:
-                return False
-                
-        return True
 
 class SearchResults(QWidget):
     """Search results display widget"""
