@@ -569,6 +569,74 @@ class MainWindow(QMainWindow):
         else:
             # Process AI chat with selected context
             self.process_ai_chat_with_context(message, selected_items)
+    
+    def process_ai_chat_with_context(self, message, selected_items):
+        """Process AI chat request with selected items as context"""
+        try:
+            # Create context summary from selected items
+            context_parts = []
+            context_parts.append(f"User Question: {message}")
+            context_parts.append(f"\nSelected Items ({len(selected_items)}):")
+            
+            for i, item in enumerate(selected_items, 1):
+                item_data = item.get('result_data', {})
+                context_parts.append(f"\n{i}. {item['name']} ({item['type']})")
+                
+                if item['type'] == 'file':
+                    context_parts.append(f"   Path: {item['path']}")
+                    if item_data.get('summary'):
+                        summary = item_data['summary'][:200] + "..." if len(item_data['summary']) > 200 else item_data['summary']
+                        context_parts.append(f"   Content: {summary}")
+                elif item['type'] == 'dataset':
+                    context_parts.append(f"   Dataset: {item['fileset_name']}")
+                    if item_data.get('user_description'):
+                        context_parts.append(f"   Description: {item_data['user_description']}")
+                    if item_data.get('schema_info'):
+                        context_parts.append(f"   Schema: {item_data['schema_info']}")
+            
+            context_summary = '\n'.join(context_parts)
+            
+            # Create AI chat result
+            ai_result = [{
+                'title': f'AI Chat: {message}',
+                'source_type': 'AI Chat',
+                'source_path': 'ai://chat/with-context',
+                'summary': f'''🤖 AI Chat with {len(selected_items)} selected items
+
+Query: "{message}"
+
+Context Items:
+{chr(10).join([f"• {item['name']} ({item['type']})" for item in selected_items])}
+
+💡 This would normally send your question along with the selected content to your configured AI model (Claude, GPT, or Local Model) for analysis.
+
+To enable AI chat:
+1. Configure AI API keys in Settings
+2. Select the AI model in the search options menu
+3. The AI will analyze your selected content and provide insights
+
+Selected content will be used as context for more accurate and relevant responses.''',
+                'owner': 'AI Assistant',
+                'last_modified': '',
+                'access_level': 'Full',
+                'can_chat': True,
+                'score': 1.0,
+                'file_type': 'AI',
+                'fileset_name': 'AI Chat',
+                'schema_info': '',
+                'tags': ['ai', 'chat', 'context'],
+                'user_description': f'AI chat with {len(selected_items)} selected items',
+                'is_dataset': False,
+                'chat_context': context_summary
+            }]
+            
+            # Display the AI chat result
+            self.search_results.display_results(ai_result)
+            self.search_results.status_label.setText(f"AI Chat ready with {len(selected_items)} selected items")
+            
+        except Exception as e:
+            logger.error(f"Error processing AI chat with context: {e}")
+            self.status_bar.showMessage(f"AI Chat error: {str(e)}")
         
     def on_file_selected(self, file_path):
         """Handle file selection from file browser"""
