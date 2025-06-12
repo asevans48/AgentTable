@@ -573,70 +573,184 @@ class MainWindow(QMainWindow):
     def process_ai_chat_with_context(self, message, selected_items):
         """Process AI chat request with selected items as context"""
         try:
-            # Create context summary from selected items
-            context_parts = []
-            context_parts.append(f"User Question: {message}")
-            context_parts.append(f"\nSelected Items ({len(selected_items)}):")
+            from utils.ai_chat import AIService
+            from PyQt6.QtCore import QThread, pyqtSignal
             
-            for i, item in enumerate(selected_items, 1):
-                item_data = item.get('result_data', {})
-                context_parts.append(f"\n{i}. {item['name']} ({item['type']})")
+            # Show processing status
+            self.status_bar.showMessage("Processing AI chat request...")
+            
+            # Create AI chat worker thread
+            class AIChatWorker(QThread):
+                chat_completed = pyqtSignal(dict)
+                chat_error = pyqtSignal(str)
                 
-                if item['type'] == 'file':
-                    context_parts.append(f"   Path: {item['path']}")
-                    if item_data.get('summary'):
-                        summary = item_data['summary'][:200] + "..." if len(item_data['summary']) > 200 else item_data['summary']
-                        context_parts.append(f"   Content: {summary}")
-                elif item['type'] == 'dataset':
-                    context_parts.append(f"   Dataset: {item['fileset_name']}")
-                    if item_data.get('user_description'):
-                        context_parts.append(f"   Description: {item_data['user_description']}")
-                    if item_data.get('schema_info'):
-                        context_parts.append(f"   Schema: {item_data['schema_info']}")
+                def __init__(self, config_manager, message, selected_items):
+                    super().__init__()
+                    self.config_manager = config_manager
+                    self.message = message
+                    self.selected_items = selected_items
+                
+                def run(self):
+                    try:
+                        ai_service = AIService(self.config_manager)
+                        result = ai_service.chat_with_context(self.message, self.selected_items)
+                        self.chat_completed.emit(result)
+                    except Exception as e:
+                        self.chat_error.emit(str(e))
             
-            context_summary = '\n'.join(context_parts)
+            def on_chat_completed(result):
+                """Handle AI chat completion"""
+                try:
+                    if result['success']:
+                        # Create successful AI chat result
+                        context = result.get('context', {})
+                        service_used = result.get('service_used', 'AI')
+                        model_used = result.get('model', 'Unknown')
+                        
+                        # Build context summary for display
+                        context_summary_parts = []
+                        if context.get('files'):
+                            context_summary_parts.append(f"📄 Files: {len(context['files'])}")
+                        if context.get('datasets'):
+                            context_summary_parts.append(f"📊 Datasets: {len(context['datasets'])}")
+                        
+                        context_display = " | ".join(context_summary_parts) if context_summary_parts else "No context items"
+                        
+                        ai_result = [{
+                            'title': f'AI Response: {message[:50]}{"..." if len(message) > 50 else ""}',
+                            'source_type': 'AI Response',
+                            'source_path': f'ai://chat/{service_used.lower()}',
+                            'summary': f'''🤖 **{service_used}** ({model_used})
+
+**Your Question:** {message}
+
+**Context:** {context_display}
+
+**AI Response:**
+{result['response']}
+
+---
+**Analysis Context:**
+• Selected items: {len(selected_items)}
+• Token estimate: ~{context.get('total_tokens_estimate', 0)}
+• Service: {service_used}
+• Model: {model_used}''',
+                            'owner': f'{service_used} AI',
+                            'last_modified': '',
+                            'access_level': 'Full',
+                            'can_chat': True,
+                            'score': 1.0,
+                            'file_type': 'AI Response',
+                            'fileset_name': service_used,
+                            'schema_info': f'Model: {model_used}, Context: {len(selected_items)} items',
+                            'tags': ['ai', 'chat', 'response', service_used.lower()],
+                            'user_description': f'AI analysis of {len(selected_items)} selected items using {service_used}',
+                            'is_dataset': False,
+                            'ai_response': result['response'],
+                            'ai_context': context
+                        }]
+                        
+                        # Display the AI response
+                        self.search_results.display_results(ai_result)
+                        self.search_results.status_label.setText(f"AI response from {service_used} ({model_used})")
+                        self.status_bar.showMessage(f"AI chat completed using {service_used}")
+                        
+                    else:
+                        # Handle AI chat error
+                        error_message = result.get('error', 'Unknown error')
+                        context = result.get('context', {})
+                        
+                        error_result = [{
+                            'title': 'AI Chat Error',
+                            'source_type': 'AI Error',
+                            'source_path': 'ai://error',
+                            'summary': f'''❌ **AI Chat Failed**
+
+**Your Question:** {message}
+
+**Error:** {error_message}
+
+**Selected Items:** {len(selected_items)}
+
+**Troubleshooting:**
+1. Check your AI API keys in Settings
+2. Verify your internet connection
+3. Ensure the AI service is available
+4. Try a different AI model
+
+**Available Services:**
+• Anthropic Claude - Requires API key
+• OpenAI GPT - Requires API key  
+• Local Ollama - Requires local installation
+
+Configure these in Settings → AI Tools.''',
+                            'owner': 'AI System',
+                            'last_modified': '',
+                            'access_level': 'Full',
+                            'can_chat': False,
+                            'score': 0.0,
+                            'file_type': 'Error',
+                            'fileset_name': 'AI Chat',
+                            'schema_info': '',
+                            'tags': ['ai', 'error', 'chat'],
+                            'user_description': 'AI chat error - check configuration',
+                            'is_dataset': False
+                        }]
+                        
+                        self.search_results.display_results(error_result)
+                        self.search_results.status_label.setText("AI chat failed - check configuration")
+                        self.status_bar.showMessage(f"AI chat error: {error_message}")
+                        
+                except Exception as e:
+                    logger.error(f"Error handling AI chat result: {e}")
+                    self.status_bar.showMessage(f"Error processing AI response: {str(e)}")
             
-            # Create AI chat result
-            ai_result = [{
-                'title': f'AI Chat: {message}',
-                'source_type': 'AI Chat',
-                'source_path': 'ai://chat/with-context',
-                'summary': f'''🤖 AI Chat with {len(selected_items)} selected items
+            def on_chat_error(error_msg):
+                """Handle AI chat worker error"""
+                logger.error(f"AI chat worker error: {error_msg}")
+                
+                error_result = [{
+                    'title': 'AI Chat System Error',
+                    'source_type': 'System Error',
+                    'source_path': 'system://error',
+                    'summary': f'''⚠️ **System Error in AI Chat**
 
-Query: "{message}"
+**Your Question:** {message}
 
-Context Items:
-{chr(10).join([f"• {item['name']} ({item['type']})" for item in selected_items])}
+**System Error:** {error_msg}
 
-💡 This would normally send your question along with the selected content to your configured AI model (Claude, GPT, or Local Model) for analysis.
+**This is likely a technical issue. Please:**
+1. Check the application logs
+2. Restart the application
+3. Report this issue if it persists
 
-To enable AI chat:
-1. Configure AI API keys in Settings
-2. Select the AI model in the search options menu
-3. The AI will analyze your selected content and provide insights
-
-Selected content will be used as context for more accurate and relevant responses.''',
-                'owner': 'AI Assistant',
-                'last_modified': '',
-                'access_level': 'Full',
-                'can_chat': True,
-                'score': 1.0,
-                'file_type': 'AI',
-                'fileset_name': 'AI Chat',
-                'schema_info': '',
-                'tags': ['ai', 'chat', 'context'],
-                'user_description': f'AI chat with {len(selected_items)} selected items',
-                'is_dataset': False,
-                'chat_context': context_summary
-            }]
+**Selected Items:** {len(selected_items)}''',
+                    'owner': 'System',
+                    'last_modified': '',
+                    'access_level': 'Full',
+                    'can_chat': False,
+                    'score': 0.0,
+                    'file_type': 'System Error',
+                    'fileset_name': 'Error Handler',
+                    'schema_info': '',
+                    'tags': ['system', 'error', 'ai'],
+                    'user_description': 'System error in AI chat processing',
+                    'is_dataset': False
+                }]
+                
+                self.search_results.display_results(error_result)
+                self.search_results.status_label.setText("AI chat system error")
+                self.status_bar.showMessage(f"AI chat system error: {error_msg}")
             
-            # Display the AI chat result
-            self.search_results.display_results(ai_result)
-            self.search_results.status_label.setText(f"AI Chat ready with {len(selected_items)} selected items")
+            # Create and start the AI chat worker
+            self.ai_chat_worker = AIChatWorker(self.config_manager, message, selected_items)
+            self.ai_chat_worker.chat_completed.connect(on_chat_completed)
+            self.ai_chat_worker.chat_error.connect(on_chat_error)
+            self.ai_chat_worker.start()
             
         except Exception as e:
-            logger.error(f"Error processing AI chat with context: {e}")
-            self.status_bar.showMessage(f"AI Chat error: {str(e)}")
+            logger.error(f"Error setting up AI chat: {e}")
+            self.status_bar.showMessage(f"AI Chat setup error: {str(e)}")
         
     def on_file_selected(self, file_path):
         """Handle file selection from file browser"""

@@ -1010,27 +1010,91 @@ class SearchWorker(QThread):
     def handle_ai_chat(self) -> List[Dict[str, Any]]:
         """Handle AI chat with selected items"""
         try:
-            # This would need to be called with selected items from the UI
-            # For now, return a placeholder that explains how AI chat works
+            from utils.ai_chat import AIService
+            
+            # Create AI service to check availability
+            ai_service = AIService(self.config_manager)
+            available_services = ai_service._get_available_ai_services()
+            
+            if not available_services:
+                return [{
+                    'title': 'AI Chat Configuration Required',
+                    'source_type': 'AI Setup',
+                    'source_path': 'ai://setup',
+                    'summary': f'''🤖 AI Chat Query: "{self.query}"
+
+❌ **No AI services configured**
+
+To enable AI chat, configure at least one AI service in Settings:
+
+**Available Options:**
+• **Anthropic Claude** - Advanced reasoning and analysis
+  - Requires API key from console.anthropic.com
+  - Models: Claude 3 Sonnet, Opus, Haiku
+
+• **OpenAI GPT** - General purpose conversations  
+  - Requires API key from platform.openai.com
+  - Models: GPT-4, GPT-4 Turbo, GPT-3.5 Turbo
+
+• **Local Ollama** - Privacy-focused local processing
+  - Requires Ollama installation (ollama.ai)
+  - Models: Qwen, Llama, Gemma, Phi, and more
+
+**Setup Steps:**
+1. Go to Settings → AI Tools
+2. Enable your preferred AI service
+3. Add your API key (for cloud services) or configure Ollama endpoint
+4. Test the configuration
+5. Return here to chat with your data
+
+Once configured, you can select documents/datasets and ask questions about them!''',
+                    'owner': 'AI Assistant',
+                    'last_modified': '',
+                    'access_level': 'Full',
+                    'can_chat': False,
+                    'score': 1.0,
+                    'file_type': 'Setup',
+                    'fileset_name': 'AI Configuration',
+                    'schema_info': '',
+                    'tags': ['ai', 'setup', 'configuration'],
+                    'user_description': 'AI Chat setup instructions',
+                    'is_dataset': False
+                }]
+            
+            # If services are available, show ready message
+            service_list = []
+            for service in available_services:
+                if service == "anthropic":
+                    service_list.append("✅ Anthropic Claude")
+                elif service == "openai":
+                    service_list.append("✅ OpenAI GPT")
+                elif service == "local_models":
+                    service_list.append("✅ Local Ollama")
+            
             return [{
                 'title': 'AI Chat Ready',
                 'source_type': 'AI Chat',
                 'source_path': 'ai://chat',
-                'summary': f'''AI Chat Query: "{self.query}"
+                'summary': f'''🤖 AI Chat Query: "{self.query}"
 
-To use AI Chat effectively:
+**Available AI Services:**
+{chr(10).join(service_list)}
+
+**How to use AI Chat:**
 1. First perform a search to find relevant documents/datasets
 2. Select the items you want to chat about using the checkboxes
 3. Then use AI Chat to ask questions about the selected content
 
-Selected items will be used as context for the AI conversation.
+**Example queries:**
+• "What is this dataset about?"
+• "Summarize the key findings in these documents"
+• "What are the main columns in this table?"
+• "Compare these two datasets"
+• "Find patterns in this data"
 
-Available AI models:
-• Claude (Anthropic) - Advanced reasoning and analysis
-• GPT (OpenAI) - General purpose conversations
-• Local Models - Privacy-focused local processing
+Selected items will be used as context for the AI conversation, making responses more accurate and relevant to your specific data.
 
-Note: AI chat functionality requires API keys to be configured in Settings.''',
+**Ready to chat!** Select some items and ask your question.''',
                 'owner': 'AI Assistant',
                 'last_modified': '',
                 'access_level': 'Full',
@@ -1038,9 +1102,9 @@ Note: AI chat functionality requires API keys to be configured in Settings.''',
                 'score': 1.0,
                 'file_type': 'AI',
                 'fileset_name': 'AI Chat',
-                'schema_info': '',
-                'tags': ['ai', 'chat', 'assistant'],
-                'user_description': 'AI Chat interface for querying selected content',
+                'schema_info': f'Available services: {", ".join(available_services)}',
+                'tags': ['ai', 'chat', 'ready'],
+                'user_description': 'AI Chat interface ready for use',
                 'is_dataset': False
             }]
             
@@ -1049,7 +1113,7 @@ Note: AI chat functionality requires API keys to be configured in Settings.''',
                 'title': 'AI Chat Error',
                 'source_type': 'Error',
                 'source_path': 'system',
-                'summary': f'Error setting up AI chat: {str(e)}',
+                'summary': f'Error checking AI chat availability: {str(e)}',
                 'owner': 'System',
                 'last_modified': '',
                 'access_level': 'Full',
