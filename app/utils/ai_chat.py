@@ -391,7 +391,7 @@ class AIService:
         except Exception as e:
             logger.warning(f"Error checking OpenAI availability: {e}")
         
-        # Check Local Models (Ollama)
+        # Check Local Models (Ollama) with automatic setup
         try:
             if self.config_manager.is_ai_tool_enabled("local_models"):
                 config = self.config_manager.get_ai_tool_config("local_models")
@@ -399,22 +399,19 @@ class AIService:
                 model = config.get("default_model", "qwen2.5:3b")
                 
                 if endpoint.strip() and model.strip():
-                    # Test if Ollama is actually running
-                    import requests
-                    try:
-                        response = requests.get(f"{endpoint}/api/tags", timeout=3)
-                        if response.status_code == 200:
-                            models_data = response.json()
-                            available_models = [m['name'] for m in models_data.get('models', [])]
-                            if model in available_models:
-                                available.append("local_models")
-                                logger.info(f"Local Ollama service available with model: {model}")
-                            else:
-                                logger.warning(f"Local model {model} not found. Available: {available_models}")
-                        else:
-                            logger.warning(f"Ollama API returned status {response.status_code}")
-                    except requests.exceptions.RequestException as e:
-                        logger.warning(f"Cannot connect to Ollama at {endpoint}: {e}")
+                    # Use Ollama manager to check availability
+                    from utils.ollama_manager import get_ollama_manager
+                    
+                    ollama_manager = get_ollama_manager(self.config_manager)
+                    status = ollama_manager.get_status()
+                    
+                    if status['ollama_available']:
+                        # Ollama is installed, mark as available
+                        # The actual model setup will happen when needed
+                        available.append("local_models")
+                        logger.info(f"Local Ollama available (will auto-setup {model} when needed)")
+                    else:
+                        logger.warning(f"Ollama not available: {status.get('error', 'Unknown error')}")
         except Exception as e:
             logger.warning(f"Error checking local models availability: {e}")
         
@@ -515,9 +512,9 @@ class AIService:
             }
     
     def _call_local_model(self, context: Dict[str, Any]) -> Dict[str, Any]:
-        """Call local Ollama model"""
+        """Call local Ollama model with automatic setup"""
         try:
-            import requests
+            from utils.ollama_manager import get_ollama_manager
             
             config = self.config_manager.get_ai_tool_config("local_models")
             endpoint = config.get("endpoint", "http://localhost:11434")
@@ -525,35 +522,28 @@ class AIService:
             temperature = config.get("temperature", 0.7)
             max_tokens = config.get("max_tokens", 512)
             
-            logger.info(f"Calling local model: {model} at {endpoint}")
+            logger.info(f"Preparing local model: {model} at {endpoint}")
+            
+            # Get Ollama manager and ensure model is ready
+            ollama_manager = get_ollama_manager(self.config_manager)
+            
+            # Ensure model is pulled and ready
+            setup_result = ollama_manager.ensure_model_ready(model, endpoint)
+            if not setup_result['success']:
+                return {
+                    'success': False,
+                    'error': f'Failed to prepare model {model}: {setup_result["error"]}',
+                    'suggestion': setup_result.get('suggestion', 'Check Ollama installation')
+                }
+            
+            logger.info(f"Model {model} is ready, making request...")
             
             # Build prompt with context
             prompt = self._build_local_prompt(context)
             logger.debug(f"Prompt length: {len(prompt)} characters")
             
-            # First verify the model is available
-            try:
-                models_response = requests.get(f"{endpoint}/api/tags", timeout=5)
-                if models_response.status_code == 200:
-                    models_data = models_response.json()
-                    available_models = [m['name'] for m in models_data.get('models', [])]
-                    if model not in available_models:
-                        return {
-                            'success': False,
-                            'error': f'Model {model} not found. Available models: {", ".join(available_models)}\nRun: ollama pull {model}'
-                        }
-                else:
-                    return {
-                        'success': False,
-                        'error': f'Cannot verify models at {endpoint}. Status: {models_response.status_code}'
-                    }
-            except requests.exceptions.RequestException as e:
-                return {
-                    'success': False,
-                    'error': f'Cannot connect to Ollama at {endpoint}. Make sure Ollama is running: ollama serve\nError: {str(e)}'
-                }
-            
             # Make the generation request
+            import requests
             generation_payload = {
                 "model": model,
                 "prompt": prompt,
@@ -601,7 +591,7 @@ class AIService:
         except ImportError:
             return {
                 'success': False,
-                'error': 'Requests library not installed. Run: pip install requests'
+                'error': 'Required libraries not installed. Run: pip install requests'
             }
         except requests.exceptions.Timeout:
             return {

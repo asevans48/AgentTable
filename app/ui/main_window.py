@@ -92,6 +92,14 @@ class MainWindow(QMainWindow):
         if hasattr(self, 'tray_icon'):
             self.tray_icon.hide()
         
+        # Shutdown Ollama if we started it
+        try:
+            from utils.ollama_manager import shutdown_ollama
+            shutdown_ollama()
+            logger.info("Ollama service shutdown completed")
+        except Exception as e:
+            logger.warning(f"Error shutting down Ollama: {e}")
+        
         # Accept the close event (actually close the app)
         event.accept()
 

@@ -201,54 +201,97 @@ class AIToolsTab(QWidget):
         self.use_gpu.setChecked(local_config.get("use_gpu", True))
         
     def verify_local_model(self):
-        """Verify that the selected local model is available"""
+        """Verify that the selected local model is available and auto-setup if needed"""
         model_name = self.local_model.currentText()
         endpoint = self.local_endpoint.text() or "http://localhost:11434"
         
         try:
-            import requests
-            import json
+            from utils.ollama_manager import get_ollama_manager
+            from PyQt6.QtCore import QThread, pyqtSignal
             
-            self.model_status_label.setText("🔄 Checking model availability...")
+            self.model_status_label.setText("🔄 Checking and setting up model...")
             self.model_status_label.setStyleSheet("color: #ffc107;")
             
-            # Check if Ollama is running
-            try:
-                response = requests.get(f"{endpoint}/api/tags", timeout=5)
-                if response.status_code == 200:
-                    models_data = response.json()
-                    available_models = [model['name'] for model in models_data.get('models', [])]
-                    
-                    if model_name in available_models:
-                        self.model_status_label.setText(f"✅ {model_name} is available and ready")
-                        self.model_status_label.setStyleSheet("color: #28a745; font-weight: bold;")
-                    else:
-                        # Show available models for reference
-                        available_list = ", ".join(available_models[:5])
-                        if len(available_models) > 5:
-                            available_list += f" (+{len(available_models) - 5} more)"
+            # Create worker thread for model verification and setup
+            class ModelSetupWorker(QThread):
+                setup_completed = pyqtSignal(dict)
+                setup_progress = pyqtSignal(str)
+                
+                def __init__(self, config_manager, model_name, endpoint):
+                    super().__init__()
+                    self.config_manager = config_manager
+                    self.model_name = model_name
+                    self.endpoint = endpoint
+                
+                def run(self):
+                    try:
+                        ollama_manager = get_ollama_manager(self.config_manager)
                         
-                        self.model_status_label.setText(
-                            f"⚠️ {model_name} not found. Available: {available_list}\n"
-                            f"Run: ollama pull {model_name}"
-                        )
-                        self.model_status_label.setStyleSheet("color: #ffc107;")
-                else:
-                    self.model_status_label.setText(f"❌ Ollama API error: {response.status_code}")
-                    self.model_status_label.setStyleSheet("color: #dc3545;")
-                    
-            except requests.exceptions.ConnectionError:
-                self.model_status_label.setText(
-                    f"❌ Cannot connect to Ollama at {endpoint}\n"
-                    "Make sure Ollama is running: ollama serve"
-                )
-                self.model_status_label.setStyleSheet("color: #dc3545;")
-            except requests.exceptions.Timeout:
-                self.model_status_label.setText("⏱️ Connection timeout - Ollama may be starting up")
+                        # Step 1: Check Ollama availability
+                        self.setup_progress.emit("Checking Ollama installation...")
+                        availability = ollama_manager.ensure_ollama_available()
+                        if not availability['success']:
+                            self.setup_completed.emit(availability)
+                            return
+                        
+                        # Step 2: Start service if needed
+                        self.setup_progress.emit("Starting Ollama service...")
+                        if not ollama_manager.is_ollama_serving(self.endpoint):
+                            start_result = ollama_manager.start_ollama_service(self.endpoint)
+                            if not start_result['success']:
+                                self.setup_completed.emit(start_result)
+                                return
+                        
+                        # Step 3: Check and pull model
+                        self.setup_progress.emit(f"Checking model {self.model_name}...")
+                        models_result = ollama_manager.get_available_models(self.endpoint)
+                        
+                        if models_result['success']:
+                            if self.model_name not in models_result['models']:
+                                self.setup_progress.emit(f"Pulling model {self.model_name}...")
+                                pull_result = ollama_manager.pull_model(self.model_name, self.endpoint)
+                                if not pull_result['success']:
+                                    self.setup_completed.emit(pull_result)
+                                    return
+                        
+                        # Step 4: Test model
+                        self.setup_progress.emit(f"Testing model {self.model_name}...")
+                        test_result = ollama_manager.test_model(self.model_name, self.endpoint)
+                        self.setup_completed.emit(test_result)
+                        
+                    except Exception as e:
+                        self.setup_completed.emit({
+                            'success': False,
+                            'error': f'Setup error: {str(e)}',
+                            'suggestion': 'Check Ollama installation'
+                        })
+            
+            def on_setup_progress(message):
+                self.model_status_label.setText(f"🔄 {message}")
                 self.model_status_label.setStyleSheet("color: #ffc107;")
+            
+            def on_setup_completed(result):
+                if result['success']:
+                    self.model_status_label.setText(f"✅ {model_name} is ready for use!")
+                    self.model_status_label.setStyleSheet("color: #28a745; font-weight: bold;")
+                else:
+                    error_msg = result.get('error', 'Unknown error')
+                    suggestion = result.get('suggestion', '')
+                    full_message = f"❌ {error_msg}"
+                    if suggestion:
+                        full_message += f"\n💡 {suggestion}"
+                    
+                    self.model_status_label.setText(full_message)
+                    self.model_status_label.setStyleSheet("color: #dc3545;")
+            
+            # Start the setup worker
+            self.setup_worker = ModelSetupWorker(self.config_manager, model_name, endpoint)
+            self.setup_worker.setup_progress.connect(on_setup_progress)
+            self.setup_worker.setup_completed.connect(on_setup_completed)
+            self.setup_worker.start()
                 
         except ImportError:
-            self.model_status_label.setText("❌ 'requests' library required for verification\nRun: pip install requests")
+            self.model_status_label.setText("❌ Required libraries not available\nRun: pip install requests")
             self.model_status_label.setStyleSheet("color: #dc3545;")
         except Exception as e:
             self.model_status_label.setText(f"❌ Verification error: {str(e)}")
