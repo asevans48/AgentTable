@@ -420,7 +420,7 @@ class VectorSearchEngine:
             return self._create_file_summary(file_path, f"Sampling failed: {str(e)}")
     
     def _sample_csv_file(self, file_path: Path, max_size: int) -> str:
-        """Sample CSV file focusing on headers and data structure"""
+        """Sample CSV file focusing on headers, data structure, and actual sample records"""
         try:
             import csv
             
@@ -452,45 +452,85 @@ class VectorSearchEngine:
                     return self._create_file_summary(file_path, "No readable CSV data")
                 
                 headers = rows[0] if rows else []
-                sample_data = rows[1:min(6, len(rows))]  # First 5 data rows
+                sample_data = rows[1:min(11, len(rows))]  # First 10 data rows for better sampling
                 
-                # Create structured summary with enhanced column information
+                # Create structured summary with enhanced metadata and sample records
                 summary_parts = [
                     f"CSV FILE: {file_path.name}",
+                    f"FILENAME_SEARCHABLE: {file_path.name}",
                     f"COLUMNS ({len(headers)}): {', '.join(headers[:10])}{'...' if len(headers) > 10 else ''}",
-                    f"SAMPLE ROWS: {len(sample_data)} of estimated {line_count}+ total rows",
+                    f"TOTAL_ESTIMATED_ROWS: {line_count}+",
+                    f"SAMPLE_ROWS_INCLUDED: {len(sample_data)}",
                     f"DELIMITER: '{delimiter}'",
+                    f"FILE_TYPE: CSV_DATA",
                     ""
                 ]
                 
-                # Add detailed column analysis for better searchability
+                # Add detailed column analysis with sample values for better searchability
                 if headers:
-                    summary_parts.append("COLUMN DETAILS:")
-                    for i, header in enumerate(headers[:10]):  # Analyze first 10 columns
-                        col_info = f"  {header}"
+                    summary_parts.append("COLUMN_METADATA:")
+                    for i, header in enumerate(headers[:15]):  # Analyze first 15 columns
+                        col_info = f"  Column_{i+1}: {header}"
                         
-                        # Analyze sample data for this column if available
+                        # Analyze sample data for this column with more examples
                         if sample_data and len(sample_data) > 0:
                             col_values = []
-                            for row in sample_data[:3]:
+                            data_types = set()
+                            
+                            for row in sample_data[:5]:  # Check first 5 rows
                                 if i < len(row) and row[i]:
-                                    col_values.append(str(row[i])[:15])
+                                    value = str(row[i])[:25]  # Longer sample values
+                                    col_values.append(value)
+                                    
+                                    # Detect data type
+                                    if value.replace('.', '').replace('-', '').isdigit():
+                                        data_types.add('numeric')
+                                    elif any(date_indicator in value.lower() for date_indicator in ['/', '-', 'date', 'time']):
+                                        data_types.add('date')
+                                    else:
+                                        data_types.add('text')
                             
                             if col_values:
-                                col_info += f" (examples: {', '.join(col_values)})"
+                                col_info += f" | Examples: {', '.join(col_values[:3])}"
+                                if data_types:
+                                    col_info += f" | Type: {'/'.join(data_types)}"
                         
                         summary_parts.append(col_info)
                     
-                    if len(headers) > 10:
-                        summary_parts.append(f"  ... and {len(headers) - 10} more columns")
+                    if len(headers) > 15:
+                        summary_parts.append(f"  ... and {len(headers) - 15} more columns")
                 
-                # Add sample data
+                # Add comprehensive sample data records
                 if sample_data:
                     summary_parts.append("")
-                    summary_parts.append("SAMPLE DATA:")
-                    for i, row in enumerate(sample_data[:3]):  # Show first 3 rows
-                        row_preview = [str(cell)[:20] + "..." if len(str(cell)) > 20 else str(cell) for cell in row[:5]]
-                        summary_parts.append(f"Row {i+1}: {' | '.join(row_preview)}")
+                    summary_parts.append("SAMPLE_DATA_RECORDS:")
+                    summary_parts.append(f"Header: {' | '.join(headers[:8])}")  # Show more headers
+                    summary_parts.append("-" * 80)
+                    
+                    for i, row in enumerate(sample_data[:5]):  # Show first 5 complete rows
+                        row_preview = []
+                        for j, cell in enumerate(row[:8]):  # Show first 8 columns
+                            cell_str = str(cell)[:30] + "..." if len(str(cell)) > 30 else str(cell)
+                            row_preview.append(cell_str)
+                        summary_parts.append(f"Row_{i+1}: {' | '.join(row_preview)}")
+                    
+                    if len(sample_data) > 5:
+                        summary_parts.append(f"... and {len(sample_data) - 5} more sample rows available")
+                
+                # Add searchable keywords based on content
+                summary_parts.append("")
+                summary_parts.append("SEARCHABLE_CONTENT_KEYWORDS:")
+                keywords = set(['csv', 'data', 'tabular', 'structured'])
+                
+                # Add column names as keywords
+                for header in headers[:10]:
+                    keywords.add(header.lower().replace(' ', '_'))
+                
+                # Add filename components
+                filename_parts = file_path.stem.lower().replace('_', ' ').replace('-', ' ').split()
+                keywords.update(filename_parts)
+                
+                summary_parts.append(f"Keywords: {', '.join(sorted(keywords))}")
                 
                 return "\n".join(summary_parts)
                 
@@ -963,47 +1003,89 @@ class VectorSearchEngine:
     def _create_enhanced_content(self, chunk: str, title: str, fileset_name: str = None, 
                                fileset_description: str = None, tags: List[str] = None,
                                user_description: str = None, schema_info: str = None) -> str:
-        """Create enhanced content for vector search prioritizing metadata and structure over raw content"""
+        """Create enhanced content for vector search with comprehensive metadata, filename, tags and sample records"""
         enhanced_parts = []
         
         # Prioritize structured metadata for better search context
         if fileset_name:
             enhanced_parts.append(f"DATASET: {fileset_name}")
         if title:
-            enhanced_parts.append(f"FILE: {title}")
+            enhanced_parts.append(f"FILENAME: {title}")
+            # Extract file extension for better categorization
+            if '.' in title:
+                ext = title.split('.')[-1].upper()
+                enhanced_parts.append(f"FILE_TYPE: {ext}")
         if fileset_description:
             enhanced_parts.append(f"PURPOSE: {fileset_description}")
         if user_description:
-            enhanced_parts.append(f"DESCRIPTION: {user_description}")
+            enhanced_parts.append(f"METADATA: {user_description}")
         if schema_info:
             enhanced_parts.append(f"SCHEMA: {schema_info}")
         if tags:
             enhanced_parts.append(f"TAGS: {', '.join(tags)}")
             
-        # Generate searchable keywords from metadata
+        # Generate comprehensive searchable keywords from all metadata
         search_keywords = set()
+        
+        # Add filename components
+        if title:
+            # Split filename on common separators
+            filename_parts = title.lower().replace('_', ' ').replace('-', ' ').replace('.', ' ').split()
+            for part in filename_parts:
+                if len(part) > 2:  # Skip very short parts
+                    search_keywords.add(part)
+        
+        # Add fileset name components
         if fileset_name:
-            # Split on common separators and add variations
             for word in fileset_name.lower().replace('_', ' ').replace('-', ' ').split():
-                search_keywords.add(word)
+                if len(word) > 2:
+                    search_keywords.add(word)
+        
+        # Add all tags as keywords
         if tags:
             for tag in tags:
                 search_keywords.add(tag.lower())
-        if title:
-            for word in title.lower().replace('_', ' ').replace('-', ' ').split():
-                search_keywords.add(word)
+                
+        # Add content-based keywords from chunk
+        if chunk:
+            # Extract key terms from content structure
+            content_lower = chunk.lower()
+            if 'columns:' in content_lower:
+                search_keywords.add('tabular')
+                search_keywords.add('structured')
+            if 'csv' in content_lower:
+                search_keywords.add('csv')
+                search_keywords.add('data')
+            if 'json' in content_lower:
+                search_keywords.add('json')
+                search_keywords.add('structured')
+            if 'python' in content_lower or 'def ' in content_lower:
+                search_keywords.add('code')
+                search_keywords.add('python')
                 
         if search_keywords:
-            enhanced_parts.append(f"KEYWORDS: {' '.join(sorted(search_keywords))}")
+            enhanced_parts.append(f"SEARCHABLE_KEYWORDS: {' '.join(sorted(search_keywords))}")
             
         # Add file path context for better discovery
-        if title and '/' in chunk:  # Likely contains path info
-            enhanced_parts.append(f"LOCATION: {title}")
+        if title:
+            enhanced_parts.append(f"SEARCHABLE_FILENAME: {title}")
             
-        # Add the structured content sample (not full content)
+        # Add sample record information if available in chunk
+        if chunk and any(indicator in chunk.lower() for indicator in ['sample data:', 'sample rows:', 'content preview:']):
+            enhanced_parts.append("CONTAINS_SAMPLE_RECORDS: Yes")
+        else:
+            enhanced_parts.append("CONTAINS_SAMPLE_RECORDS: Structure only")
+            
+        # Add the structured content sample with clear separation
         enhanced_parts.append("---")
-        enhanced_parts.append("CONTENT STRUCTURE:")
+        enhanced_parts.append("CONTENT_STRUCTURE_AND_SAMPLES:")
         enhanced_parts.append(chunk)
+        
+        # Add footer with indexing metadata
+        enhanced_parts.append("---")
+        enhanced_parts.append(f"INDEXED_FOR_SEARCH: Vector search enabled")
+        if tags:
+            enhanced_parts.append(f"CATEGORIZED_AS: {', '.join(tags[:3])}")
         
         return '\n'.join(enhanced_parts)
         
@@ -1289,9 +1371,9 @@ class VectorSearchEngine:
     def index_directory(self, directory_path: str, file_extensions: List[str] = None, 
                        fileset_name: str = None, fileset_description: str = None,
                        tags: List[str] = None, max_files: int = 1000) -> Dict[str, Any]:
-        """Index supported files in a directory with dataset metadata and limits"""
+        """Index supported files in a directory with enhanced metadata, filename, tags and sample records"""
         if file_extensions is None:
-            file_extensions = ['.txt', '.md', '.py', '.json', '.csv', '.sql']
+            file_extensions = ['.txt', '.md', '.py', '.json', '.csv', '.sql', '.xlsx', '.docx', '.pdf']
             
         directory_path = Path(directory_path)
         
@@ -1344,14 +1426,36 @@ class VectorSearchEngine:
                     if i % 50 == 0:
                         logger.info(f"Indexing progress: {i}/{len(all_files)} files")
                         
+                    # Enhanced indexing with filename, metadata, and tags
+                    enhanced_tags = (tags or []).copy()
+                    enhanced_tags.extend([
+                        'file',
+                        file_path.suffix.lower().replace('.', '') if file_path.suffix else 'no_extension',
+                        f'directory_{file_path.parent.name}',
+                        'indexed_content'
+                    ])
+                    
+                    # Create enhanced description with filename and metadata
+                    enhanced_description = f"""
+FILENAME: {file_path.name}
+DIRECTORY: {file_path.parent.name}
+FULL_PATH: {file_path}
+FILE_TYPE: {file_path.suffix.upper() if file_path.suffix else 'NO_EXTENSION'}
+FILESET: {fileset_name or 'Unknown'}
+                    """.strip()
+                    
+                    if fileset_description:
+                        enhanced_description += f"\nFILESET_DESCRIPTION: {fileset_description}"
+                    
                     if self.index_document(
                         str(file_path), 
                         fileset_name=fileset_name,
                         fileset_description=fileset_description,
-                        tags=tags
+                        tags=enhanced_tags,
+                        user_description=enhanced_description
                     ):
                         results['indexed_files'] += 1
-                        logger.debug(f"Successfully indexed: {file_path}")
+                        logger.debug(f"Successfully indexed with metadata: {file_path}")
                     else:
                         results['skipped_files'] += 1
                         logger.debug(f"Skipped (no content): {file_path}")

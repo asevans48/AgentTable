@@ -688,7 +688,7 @@ class MainWindow(QMainWindow):
                 watched_dirs = self.config_manager.get("file_management.watched_directories", [])
                 
                 # Also include any datasets that should be indexed
-                datasets = self.dataset_browser.get_selected_datasets() if hasattr(self, 'dataset_browser') else []
+                datasets = self.dataset_browser.all_datasets if hasattr(self, 'dataset_browser') else []
                 
                 if not watched_dirs and not datasets:
                     QMessageBox.warning(
@@ -754,31 +754,55 @@ class MainWindow(QMainWindow):
                                     total_results['skipped_files'] += results['skipped_files']
                                     total_results['errors'].extend(results['errors'])
                             
-                            # Index datasets as virtual documents
+                            # Index datasets as virtual documents with enhanced metadata
                             if self.datasets:
-                                self.progress_updated.emit(70, "Indexing datasets...")
+                                self.progress_updated.emit(70, "Indexing datasets with metadata...")
                                 for i, dataset in enumerate(self.datasets):
                                     progress_val = 70 + (20 * (i + 1) // len(self.datasets))
                                     self.progress_updated.emit(progress_val, f"Indexing dataset: {dataset.get('name', 'Unknown')}")
                                     
-                                    # Create virtual document for dataset
+                                    # Create virtual document for dataset with comprehensive metadata
                                     dataset_id = f"dataset://{dataset['name']}"
-                                    success = vector_engine.index_document(
-                                        dataset_id,
-                                        fileset_name=dataset['name'],
-                                        fileset_description=dataset.get('description', ''),
-                                        tags=dataset.get('tags', []),
-                                        user_description=f"""
-Dataset: {dataset['name']}
+                                    
+                                    # Prepare enhanced tags including metadata
+                                    dataset_tags = dataset.get('tags', []).copy()
+                                    dataset_tags.extend(['dataset', 'metadata', dataset.get('type', 'unknown').lower()])
+                                    if dataset.get('connection_name'):
+                                        dataset_tags.append(f"connection_{dataset['connection_name']}")
+                                    
+                                    # Create comprehensive description with sample data structure
+                                    enhanced_description = f"""
+DATASET METADATA:
+Name: {dataset['name']}
 Type: {dataset.get('type', 'Unknown')}
-Description: {dataset.get('description', '')}
+Description: {dataset.get('description', 'No description available')}
 Owner: {dataset.get('owner', 'Unknown')}
 Source: {dataset.get('source', '')}
 Access Level: {dataset.get('access_level', 'Unknown')}
 Row Count: {dataset.get('row_count', 'Unknown')}
-Schema: {dataset.get('schema_info', 'Unknown')}
 Connection: {dataset.get('connection_name', 'Unknown')}
-                                        """.strip()
+
+SCHEMA INFORMATION:
+{dataset.get('schema_info', 'Schema information not available')}
+
+SEARCHABLE KEYWORDS:
+- Dataset name: {dataset['name']}
+- Data type: {dataset.get('type', 'Unknown')}
+- Owner: {dataset.get('owner', 'Unknown')}
+- Tags: {', '.join(dataset.get('tags', []))}
+- Connection: {dataset.get('connection_name', 'Unknown')}
+
+SAMPLE STRUCTURE:
+{self._generate_sample_structure(dataset)}
+                                    """.strip()
+                                    
+                                    success = vector_engine.index_document(
+                                        dataset_id,
+                                        fileset_name=dataset['name'],
+                                        fileset_description=dataset.get('description', ''),
+                                        tags=dataset_tags,
+                                        user_description=enhanced_description,
+                                        schema_info=dataset.get('schema_info', '')
                                     )
                                     
                                     if success:
@@ -798,6 +822,28 @@ Connection: {dataset.get('connection_name', 'Unknown')}
                             
                         except Exception as e:
                             self.rebuild_error.emit(str(e))
+                    
+                    def _generate_sample_structure(self, dataset):
+                        """Generate sample structure information for dataset"""
+                        try:
+                            dataset_type = dataset.get('type', 'Unknown').lower()
+                            schema_info = dataset.get('schema_info', '')
+                            
+                            if dataset_type == 'table' and schema_info:
+                                if 'Columns:' in schema_info:
+                                    columns_part = schema_info.split('Columns:')[1].strip()
+                                    columns = [col.strip() for col in columns_part.split(',')[:5]]
+                                    return f"Table columns (sample): {', '.join(columns)}"
+                            elif dataset_type == 'view' and schema_info:
+                                return f"View structure: {schema_info[:100]}..."
+                            elif 'csv' in dataset.get('name', '').lower():
+                                return "CSV file with tabular data structure"
+                            elif 'json' in dataset.get('name', '').lower():
+                                return "JSON file with structured data"
+                            
+                            return f"{dataset_type.title()} with {dataset.get('row_count', 'unknown')} records"
+                        except:
+                            return "Data structure information not available"
                 
                 # Create and start worker
                 self.rebuild_worker = RebuildWorker(self.config_manager, watched_dirs, datasets)
