@@ -584,6 +584,10 @@ class MainWindow(QMainWindow):
             from utils.ai_chat import AIService
             from PyQt6.QtCore import QThread, pyqtSignal
             
+            logger.info(f"=== MAIN WINDOW AI CHAT ===")
+            logger.info(f"Message: {message}")
+            logger.info(f"Selected items count: {len(selected_items)}")
+            
             # Show processing status
             self.status_bar.showMessage("Processing AI chat request...")
             
@@ -600,10 +604,13 @@ class MainWindow(QMainWindow):
                 
                 def run(self):
                     try:
+                        logger.info(f"AI chat worker starting for message: {self.message[:50]}...")
                         ai_service = AIService(self.config_manager)
                         result = ai_service.chat_with_context(self.message, self.selected_items)
+                        logger.info(f"AI chat worker completed. Success: {result.get('success', False)}")
                         self.chat_completed.emit(result)
                     except Exception as e:
+                        logger.error(f"AI chat worker error: {e}")
                         self.chat_error.emit(str(e))
             
             def on_chat_completed(result):

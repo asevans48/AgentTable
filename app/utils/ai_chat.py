@@ -299,11 +299,18 @@ class AIService:
     def chat_with_context(self, user_question: str, selected_items: List[Dict[str, Any]]) -> Dict[str, Any]:
         """Process AI chat request with context"""
         try:
-            logger.info(f"Starting AI chat with question: {user_question[:100]}...")
+            logger.info(f"=== AI CHAT REQUEST START ===")
+            logger.info(f"User question: {user_question}")
+            logger.info(f"Selected items count: {len(selected_items)}")
+            
+            # Log selected items details
+            for i, item in enumerate(selected_items):
+                logger.info(f"Selected item {i+1}: {item.get('name', 'Unknown')} ({item.get('type', 'Unknown')})")
             
             # Build context from selected items
             context = self.context_builder.build_context(selected_items, user_question)
             logger.info(f"Built context with {context['selected_items_count']} items")
+            logger.info(f"Context token estimate: {context.get('total_tokens_estimate', 0)}")
             
             # Check which AI services are available
             available_services = self._get_available_ai_services()
@@ -327,6 +334,9 @@ class AIService:
                     
                     if response['success']:
                         logger.info(f"Successfully got response from {service_name}")
+                        logger.info(f"Response length: {len(response.get('response', ''))} characters")
+                        logger.info(f"Model used: {response.get('model', 'Unknown')}")
+                        logger.info(f"=== AI CHAT REQUEST SUCCESS ===")
                         response['context'] = context
                         response['service_used'] = service_name
                         return response
@@ -352,6 +362,9 @@ class AIService:
             detailed_error += f"3. For local models, ensure Ollama is running: ollama serve\n"
             detailed_error += f"4. Check the application logs for more details"
             
+            logger.error(f"=== AI CHAT REQUEST FAILED ===")
+            logger.error(f"All services failed. Errors: {service_errors}")
+            
             return {
                 'success': False,
                 'error': detailed_error,
@@ -360,7 +373,10 @@ class AIService:
             }
             
         except Exception as e:
-            logger.error(f"Error in AI chat: {e}")
+            logger.error(f"=== AI CHAT REQUEST ERROR ===")
+            logger.error(f"System error in AI chat: {e}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
             return {
                 'success': False,
                 'error': f'AI chat system error: {str(e)}',
@@ -438,11 +454,18 @@ class AIService:
             api_key = config.get("api_key", "")
             model = config.get("model", "claude-3-sonnet-20240229")
             
+            logger.info(f"=== ANTHROPIC REQUEST ===")
+            logger.info(f"Model: {model}")
+            logger.info(f"API key configured: {'Yes' if api_key else 'No'}")
+            
             client = anthropic.Anthropic(api_key=api_key)
             
             # Build prompt with context
             prompt = self._build_anthropic_prompt(context)
+            logger.info(f"Generated prompt length: {len(prompt)} characters")
+            logger.debug(f"Full prompt content:\n{prompt}")
             
+            logger.info(f"Sending request to Anthropic Claude API")
             response = client.messages.create(
                 model=model,
                 max_tokens=1000,
@@ -451,9 +474,13 @@ class AIService:
                 ]
             )
             
+            ai_response = response.content[0].text
+            logger.info(f"Anthropic response length: {len(ai_response)} characters")
+            logger.debug(f"Anthropic response content: {ai_response}")
+            
             return {
                 'success': True,
-                'response': response.content[0].text,
+                'response': ai_response,
                 'model': model,
                 'service': 'Anthropic Claude'
             }
@@ -478,11 +505,18 @@ class AIService:
             api_key = config.get("api_key", "")
             model = config.get("model", "gpt-4")
             
+            logger.info(f"=== OPENAI REQUEST ===")
+            logger.info(f"Model: {model}")
+            logger.info(f"API key configured: {'Yes' if api_key else 'No'}")
+            
             client = openai.OpenAI(api_key=api_key)
             
             # Build prompt with context
             prompt = self._build_openai_prompt(context)
+            logger.info(f"Generated prompt length: {len(prompt)} characters")
+            logger.debug(f"Full prompt content:\n{prompt}")
             
+            logger.info(f"Sending request to OpenAI GPT API")
             response = client.chat.completions.create(
                 model=model,
                 messages=[
@@ -493,9 +527,13 @@ class AIService:
                 temperature=0.7
             )
             
+            ai_response = response.choices[0].message.content
+            logger.info(f"OpenAI response length: {len(ai_response)} characters")
+            logger.debug(f"OpenAI response content: {ai_response}")
+            
             return {
                 'success': True,
-                'response': response.choices[0].message.content,
+                'response': ai_response,
                 'model': model,
                 'service': 'OpenAI GPT'
             }
@@ -522,7 +560,11 @@ class AIService:
             temperature = config.get("temperature", 0.7)
             max_tokens = config.get("max_tokens", 512)
             
-            logger.info(f"Preparing local model: {model} at {endpoint}")
+            logger.info(f"=== LOCAL MODEL REQUEST ===")
+            logger.info(f"Model: {model}")
+            logger.info(f"Endpoint: {endpoint}")
+            logger.info(f"Temperature: {temperature}")
+            logger.info(f"Max tokens: {max_tokens}")
             
             # Get Ollama manager and ensure model is ready
             ollama_manager = get_ollama_manager(self.config_manager)
@@ -540,7 +582,8 @@ class AIService:
             
             # Build prompt with context
             prompt = self._build_local_prompt(context)
-            logger.debug(f"Prompt length: {len(prompt)} characters")
+            logger.info(f"Generated prompt length: {len(prompt)} characters")
+            logger.debug(f"Full prompt content:\n{prompt}")
             
             # Make the generation request
             import requests
@@ -554,7 +597,9 @@ class AIService:
                 }
             }
             
-            logger.debug(f"Sending request to {endpoint}/api/generate")
+            logger.info(f"Sending request to {endpoint}/api/generate")
+            logger.debug(f"Request payload: {generation_payload}")
+            
             response = requests.post(
                 f"{endpoint}/api/generate",
                 json=generation_payload,
@@ -562,12 +607,19 @@ class AIService:
             )
             
             logger.info(f"Ollama response status: {response.status_code}")
+            if response.status_code != 200:
+                logger.error(f"Ollama response text: {response.text}")
             
             if response.status_code == 200:
                 result = response.json()
                 ai_response = result.get('response', 'No response received')
                 
+                logger.info(f"Raw response from Ollama: {result}")
+                logger.info(f"AI response length: {len(ai_response)} characters")
+                logger.debug(f"AI response content: {ai_response}")
+                
                 if not ai_response or ai_response.strip() == '':
+                    logger.warning(f"Model {model} returned empty response")
                     return {
                         'success': False,
                         'error': f'Model {model} returned empty response. The model may not be properly loaded.'
