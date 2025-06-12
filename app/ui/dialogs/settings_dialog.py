@@ -91,8 +91,8 @@ class AIToolsTab(QWidget):
             "gemma2:9b", "gemma2:7b", "gemma2:2b",
             "mistral:7b", "mistral-nemo:12b",
             "phi3.5:3.8b", "phi3:3.8b", "phi3:mini",
-            # Gemma 3 models (<5B)
-            "gemma3:2b", "gemma3:1.5b", "gemma3:1b",
+            # Gemma 3 models
+            "gemma3:1b", "gemma3:4b", "gemma3:12b", "gemma3:27b",
             # Medium models (1-3B)
             "qwen2.5:1.5b", "qwen2.5:0.5b",
             "llama3.2:1b", "gemma2:2b",
