@@ -12,6 +12,8 @@ from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QFont
 from typing import List, Dict, Any
 import logging
+from datetime import datetime
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -203,11 +205,26 @@ class DatasetBrowser(QWidget):
         self.filtered_datasets = []
         self.current_filters = {}
         self.vector_engine = None
+        self.connection_manager = None
         
         self.setup_ui()
         self.setup_connections()
         self.load_vector_engine()
+        self.load_connection_manager()
         self.load_datasets()
+    
+    def load_connection_manager(self):
+        """Load database connection manager"""
+        try:
+            from utils.database.connection_manager import DatabaseConnectionManager
+            from utils.credential_manager import CredentialManager
+            
+            credential_manager = CredentialManager()
+            self.connection_manager = DatabaseConnectionManager(self.config_manager, credential_manager)
+            logger.info("Database connection manager loaded")
+        except Exception as e:
+            logger.error(f"Failed to load connection manager: {e}")
+            self.connection_manager = None
         
     def setup_ui(self):
         """Setup the dataset browser UI"""
@@ -324,77 +341,40 @@ class DatasetBrowser(QWidget):
         
     def load_datasets(self):
         """Load datasets from configuration and external sources"""
-        # Load registered datasets
-        registered = self.config_manager.get_registered_datasets()
-        
-        # Add some mock datasets for demonstration
-        mock_datasets = [
-            {
-                'name': 'Customer Analytics',
-                'type': 'Table',
-                'description': 'Comprehensive customer data including demographics, purchase history, and behavior analytics.',
-                'owner': 'Analytics Team',
-                'access_level': 'Full',
-                'last_updated': '2024-12-20',
-                'row_count': 125000,
-                'source': 'bigquery://analytics.customers',
-                'supports_chat': True,
-                'tags': ['customer', 'analytics', 'pii']
-            },
-            {
-                'name': 'Sales Performance',
-                'type': 'View',
-                'description': 'Aggregated sales metrics by region, product, and time period.',
-                'owner': 'Sales Team',
-                'access_level': 'Read-Only',
-                'last_updated': '2024-12-21',
-                'row_count': 50000,
-                'source': 'bigquery://sales.performance_view',
-                'supports_chat': True,
-                'tags': ['sales', 'metrics']
-            },
-            {
-                'name': 'Financial Reports',
-                'type': 'File',
-                'description': 'Monthly and quarterly financial reports in Excel format.',
-                'owner': 'Finance Team',
-                'access_level': 'No Access',
-                'last_updated': '2024-12-15',
-                'source': '/finance/reports/',
-                'supports_chat': False,
-                'tags': ['finance', 'confidential']
-            },
-            {
-                'name': 'Product Catalog',
-                'type': 'API',
-                'description': 'Real-time product information including pricing, inventory, and specifications.',
-                'owner': 'Product Team',
-                'access_level': 'Read',
-                'last_updated': '2024-12-21',
-                'row_count': 15000,
-                'source': 'api://catalog.product.com/v2',
-                'supports_chat': True,
-                'tags': ['product', 'catalog', 'realtime']
-            },
-            {
-                'name': 'User Activity Stream',
-                'type': 'Stream',
-                'description': 'Real-time user activity events from web and mobile applications.',
-                'owner': 'Engineering Team',
-                'access_level': 'Full',
-                'last_updated': '2024-12-21',
-                'source': 'kafka://events.user_activity',
-                'supports_chat': True,
-                'tags': ['events', 'realtime', 'user']
-            }
-        ]
-        
-        self.all_datasets = registered + mock_datasets
-        
-        # Auto-index new datasets to vector database
-        self.auto_index_datasets(mock_datasets)
-        
-        self.apply_filters()
+        try:
+            self.status_label.setText("Loading datasets...")
+            
+            # Load registered datasets
+            registered = self.config_manager.get_registered_datasets()
+            logger.info(f"Loaded {len(registered)} registered datasets")
+            
+            # Discover datasets from configured database connections
+            self.status_label.setText("Discovering external datasets...")
+            discovered_datasets = self.discover_database_datasets()
+            logger.info(f"Discovered {len(discovered_datasets)} external datasets")
+            
+            # Discover local database datasets
+            self.status_label.setText("Discovering local datasets...")
+            local_datasets = self.discover_local_datasets()
+            logger.info(f"Discovered {len(local_datasets)} local datasets")
+            
+            # Combine all datasets
+            self.all_datasets = registered + discovered_datasets + local_datasets
+            
+            # Auto-index new datasets to vector database
+            if discovered_datasets or local_datasets:
+                self.status_label.setText("Indexing new datasets...")
+                self.auto_index_datasets(discovered_datasets + local_datasets)
+            
+            self.apply_filters()
+            
+            logger.info(f"Total datasets loaded: {len(self.all_datasets)}")
+            
+        except Exception as e:
+            logger.error(f"Error loading datasets: {e}")
+            self.status_label.setText(f"Error loading datasets: {str(e)}")
+            self.all_datasets = []
+            self.apply_filters()
     
     def apply_dataset_filters(self, filters: Dict[str, Any]):
         """Apply filters to the dataset list"""
@@ -532,6 +512,386 @@ class DatasetBrowser(QWidget):
                 f"Access request for '{dataset_info['name']}' has been sent to {dataset_info['owner']}."
             )
             
+    def discover_database_datasets(self) -> List[Dict[str, Any]]:
+        """Discover datasets from configured database connections"""
+        datasets = []
+        
+        try:
+            # Get database connections from config
+            db_connections = self.config_manager.get("database.connections", {})
+            
+            for conn_name, conn_config in db_connections.items():
+                if not conn_config.get('enabled', True):
+                    continue
+                    
+                try:
+                    db_datasets = self._discover_from_connection(conn_name, conn_config)
+                    datasets.extend(db_datasets)
+                except Exception as e:
+                    logger.error(f"Error discovering datasets from {conn_name}: {e}")
+                    
+        except Exception as e:
+            logger.error(f"Error discovering database datasets: {e}")
+            
+        return datasets
+    
+    def discover_local_datasets(self) -> List[Dict[str, Any]]:
+        """Discover datasets from local SQLite and DuckDB databases"""
+        datasets = []
+        
+        try:
+            # Check for local SQLite databases
+            local_db_path = self.config_manager.get("local_database.sqlite_path", "data/local.db")
+            if Path(local_db_path).exists():
+                sqlite_datasets = self._discover_sqlite_datasets(local_db_path)
+                datasets.extend(sqlite_datasets)
+            
+            # Check for local DuckDB databases
+            duckdb_path = self.config_manager.get("local_database.duckdb_path", "data/local.duckdb")
+            if Path(duckdb_path).exists():
+                duckdb_datasets = self._discover_duckdb_datasets(duckdb_path)
+                datasets.extend(duckdb_datasets)
+                
+        except Exception as e:
+            logger.error(f"Error discovering local datasets: {e}")
+            
+        return datasets
+    
+    def _discover_from_connection(self, conn_name: str, conn_config: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Discover datasets from a specific database connection"""
+        datasets = []
+        db_type = conn_config.get('type', '').lower()
+        
+        try:
+            if db_type == 'postgresql':
+                datasets = self._discover_postgresql_datasets(conn_name, conn_config)
+            elif db_type in ['mssql', 'sqlserver']:
+                datasets = self._discover_mssql_datasets(conn_name, conn_config)
+            elif db_type == 'bigquery':
+                datasets = self._discover_bigquery_datasets(conn_name, conn_config)
+            elif db_type == 'azure_sql':
+                datasets = self._discover_azure_sql_datasets(conn_name, conn_config)
+            else:
+                logger.warning(f"Unsupported database type: {db_type}")
+                
+        except Exception as e:
+            logger.error(f"Error discovering datasets from {conn_name} ({db_type}): {e}")
+            
+        return datasets
+    
+    def _discover_sqlite_datasets(self, db_path: str) -> List[Dict[str, Any]]:
+        """Discover tables and views from SQLite database"""
+        datasets = []
+        
+        try:
+            import sqlite3
+            
+            conn = sqlite3.connect(db_path)
+            cursor = conn.cursor()
+            
+            # Get tables
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
+            tables = cursor.fetchall()
+            
+            for (table_name,) in tables:
+                try:
+                    # Get row count
+                    cursor.execute(f"SELECT COUNT(*) FROM [{table_name}]")
+                    row_count = cursor.fetchone()[0]
+                    
+                    # Get column info
+                    cursor.execute(f"PRAGMA table_info([{table_name}])")
+                    columns = cursor.fetchall()
+                    column_names = [col[1] for col in columns]
+                    
+                    datasets.append({
+                        'name': f"SQLite.{table_name}",
+                        'type': 'Table',
+                        'description': f'SQLite table with {len(column_names)} columns: {", ".join(column_names[:5])}{"..." if len(column_names) > 5 else ""}',
+                        'owner': 'Local Database',
+                        'access_level': 'Full',
+                        'last_updated': datetime.now().strftime('%Y-%m-%d'),
+                        'row_count': row_count,
+                        'source': f'sqlite://{db_path}#{table_name}',
+                        'supports_chat': True,
+                        'tags': ['local', 'sqlite', 'table'],
+                        'connection_name': 'local_sqlite',
+                        'schema_info': f'Columns: {", ".join(column_names)}'
+                    })
+                    
+                except Exception as e:
+                    logger.warning(f"Error analyzing SQLite table {table_name}: {e}")
+            
+            # Get views
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='view'")
+            views = cursor.fetchall()
+            
+            for (view_name,) in views:
+                try:
+                    # Get row count
+                    cursor.execute(f"SELECT COUNT(*) FROM [{view_name}]")
+                    row_count = cursor.fetchone()[0]
+                    
+                    datasets.append({
+                        'name': f"SQLite.{view_name}",
+                        'type': 'View',
+                        'description': f'SQLite view with {row_count} rows',
+                        'owner': 'Local Database',
+                        'access_level': 'Full',
+                        'last_updated': datetime.now().strftime('%Y-%m-%d'),
+                        'row_count': row_count,
+                        'source': f'sqlite://{db_path}#{view_name}',
+                        'supports_chat': True,
+                        'tags': ['local', 'sqlite', 'view'],
+                        'connection_name': 'local_sqlite'
+                    })
+                    
+                except Exception as e:
+                    logger.warning(f"Error analyzing SQLite view {view_name}: {e}")
+            
+            conn.close()
+            
+        except Exception as e:
+            logger.error(f"Error discovering SQLite datasets from {db_path}: {e}")
+            
+        return datasets
+    
+    def _discover_duckdb_datasets(self, db_path: str) -> List[Dict[str, Any]]:
+        """Discover tables and views from DuckDB database"""
+        datasets = []
+        
+        try:
+            import duckdb
+            
+            conn = duckdb.connect(db_path)
+            
+            # Get tables
+            tables_result = conn.execute("SHOW TABLES").fetchall()
+            
+            for (table_name,) in tables_result:
+                try:
+                    # Get row count
+                    row_count = conn.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()[0]
+                    
+                    # Get column info
+                    columns_result = conn.execute(f"DESCRIBE {table_name}").fetchall()
+                    column_names = [col[0] for col in columns_result]
+                    
+                    datasets.append({
+                        'name': f"DuckDB.{table_name}",
+                        'type': 'Table',
+                        'description': f'DuckDB table with {len(column_names)} columns: {", ".join(column_names[:5])}{"..." if len(column_names) > 5 else ""}',
+                        'owner': 'Local Database',
+                        'access_level': 'Full',
+                        'last_updated': datetime.now().strftime('%Y-%m-%d'),
+                        'row_count': row_count,
+                        'source': f'duckdb://{db_path}#{table_name}',
+                        'supports_chat': True,
+                        'tags': ['local', 'duckdb', 'table'],
+                        'connection_name': 'local_duckdb',
+                        'schema_info': f'Columns: {", ".join(column_names)}'
+                    })
+                    
+                except Exception as e:
+                    logger.warning(f"Error analyzing DuckDB table {table_name}: {e}")
+            
+            conn.close()
+            
+        except ImportError:
+            logger.warning("DuckDB not available - install with: pip install duckdb")
+        except Exception as e:
+            logger.error(f"Error discovering DuckDB datasets from {db_path}: {e}")
+            
+        return datasets
+    
+    def _discover_postgresql_datasets(self, conn_name: str, conn_config: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Discover datasets from PostgreSQL database"""
+        datasets = []
+        
+        if not self.connection_manager:
+            logger.warning("Connection manager not available")
+            return datasets
+        
+        try:
+            conn = self.connection_manager.get_connection(conn_name)
+            cursor = conn.cursor()
+            
+            # Get tables and views
+            cursor.execute("""
+                SELECT table_name, table_type, table_schema
+                FROM information_schema.tables 
+                WHERE table_schema NOT IN ('information_schema', 'pg_catalog')
+                ORDER BY table_schema, table_name
+            """)
+            
+            tables = cursor.fetchall()
+            
+            for table_name, table_type, schema_name in tables:
+                try:
+                    # Get row count
+                    cursor.execute(f"SELECT COUNT(*) FROM {schema_name}.{table_name}")
+                    row_count = cursor.fetchone()[0]
+                    
+                    # Get column info
+                    cursor.execute("""
+                        SELECT column_name, data_type 
+                        FROM information_schema.columns 
+                        WHERE table_schema = %s AND table_name = %s
+                        ORDER BY ordinal_position
+                    """, (schema_name, table_name))
+                    
+                    columns = cursor.fetchall()
+                    column_info = [f"{col[0]} ({col[1]})" for col in columns]
+                    
+                    datasets.append({
+                        'name': f"{conn_name}.{schema_name}.{table_name}",
+                        'type': 'Table' if table_type == 'BASE TABLE' else 'View',
+                        'description': f'PostgreSQL {table_type.lower()} with {len(columns)} columns',
+                        'owner': conn_config.get('username', 'Unknown'),
+                        'access_level': 'Full',
+                        'last_updated': datetime.now().strftime('%Y-%m-%d'),
+                        'row_count': row_count,
+                        'source': f'postgresql://{conn_config["host"]}:{conn_config.get("port", 5432)}/{conn_config["database"]}#{schema_name}.{table_name}',
+                        'supports_chat': True,
+                        'tags': ['postgresql', 'external', schema_name],
+                        'connection_name': conn_name,
+                        'schema_info': f'Columns: {", ".join([col[0] for col in columns])}'
+                    })
+                    
+                except Exception as e:
+                    logger.warning(f"Error analyzing PostgreSQL table {schema_name}.{table_name}: {e}")
+            
+            conn.close()
+            
+        except ImportError:
+            logger.warning("PostgreSQL driver not available - install with: pip install psycopg2-binary")
+        except Exception as e:
+            logger.error(f"Error discovering PostgreSQL datasets from {conn_name}: {e}")
+            
+        return datasets
+    
+    def _discover_mssql_datasets(self, conn_name: str, conn_config: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Discover datasets from MSSQL/SQL Server database"""
+        datasets = []
+        
+        if not self.connection_manager:
+            logger.warning("Connection manager not available")
+            return datasets
+        
+        try:
+            conn = self.connection_manager.get_connection(conn_name)
+            cursor = conn.cursor()
+            
+            # Get tables and views
+            cursor.execute("""
+                SELECT TABLE_NAME, TABLE_TYPE, TABLE_SCHEMA
+                FROM INFORMATION_SCHEMA.TABLES 
+                WHERE TABLE_SCHEMA NOT IN ('sys', 'INFORMATION_SCHEMA')
+                ORDER BY TABLE_SCHEMA, TABLE_NAME
+            """)
+            
+            tables = cursor.fetchall()
+            
+            for table_name, table_type, schema_name in tables:
+                try:
+                    # Get row count
+                    cursor.execute(f"SELECT COUNT(*) FROM [{schema_name}].[{table_name}]")
+                    row_count = cursor.fetchone()[0]
+                    
+                    # Get column info
+                    cursor.execute("""
+                        SELECT COLUMN_NAME, DATA_TYPE 
+                        FROM INFORMATION_SCHEMA.COLUMNS 
+                        WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?
+                        ORDER BY ORDINAL_POSITION
+                    """, schema_name, table_name)
+                    
+                    columns = cursor.fetchall()
+                    
+                    datasets.append({
+                        'name': f"{conn_name}.{schema_name}.{table_name}",
+                        'type': 'Table' if table_type == 'BASE TABLE' else 'View',
+                        'description': f'SQL Server {table_type.lower()} with {len(columns)} columns',
+                        'owner': conn_config.get('username', 'Unknown'),
+                        'access_level': 'Full',
+                        'last_updated': datetime.now().strftime('%Y-%m-%d'),
+                        'row_count': row_count,
+                        'source': f'mssql://{conn_config["host"]}/{conn_config["database"]}#{schema_name}.{table_name}',
+                        'supports_chat': True,
+                        'tags': ['mssql', 'external', schema_name],
+                        'connection_name': conn_name,
+                        'schema_info': f'Columns: {", ".join([col[0] for col in columns])}'
+                    })
+                    
+                except Exception as e:
+                    logger.warning(f"Error analyzing SQL Server table {schema_name}.{table_name}: {e}")
+            
+            conn.close()
+            
+        except ImportError:
+            logger.warning("SQL Server driver not available - install with: pip install pyodbc")
+        except Exception as e:
+            logger.error(f"Error discovering SQL Server datasets from {conn_name}: {e}")
+            
+        return datasets
+    
+    def _discover_bigquery_datasets(self, conn_name: str, conn_config: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Discover datasets from BigQuery"""
+        datasets = []
+        
+        if not self.connection_manager:
+            logger.warning("Connection manager not available")
+            return datasets
+        
+        try:
+            client = self.connection_manager.get_connection(conn_name)
+            
+            # List datasets
+            bq_datasets = list(client.list_datasets())
+            
+            for dataset in bq_datasets:
+                try:
+                    # List tables in dataset
+                    tables = list(client.list_tables(dataset.dataset_id))
+                    
+                    for table in tables:
+                        try:
+                            # Get table details
+                            table_ref = client.get_table(table.reference)
+                            
+                            datasets.append({
+                                'name': f"{conn_name}.{dataset.dataset_id}.{table.table_id}",
+                                'type': 'Table' if table_ref.table_type == 'TABLE' else 'View',
+                                'description': f'BigQuery {table_ref.table_type.lower()} with {len(table_ref.schema)} columns',
+                                'owner': conn_config.get('project_id', 'Unknown'),
+                                'access_level': 'Read',
+                                'last_updated': table_ref.modified.strftime('%Y-%m-%d') if table_ref.modified else 'Unknown',
+                                'row_count': table_ref.num_rows or 0,
+                                'source': f'bigquery://{conn_config["project_id"]}/{dataset.dataset_id}/{table.table_id}',
+                                'supports_chat': True,
+                                'tags': ['bigquery', 'external', dataset.dataset_id],
+                                'connection_name': conn_name,
+                                'schema_info': f'Columns: {", ".join([field.name for field in table_ref.schema])}'
+                            })
+                            
+                        except Exception as e:
+                            logger.warning(f"Error analyzing BigQuery table {table.table_id}: {e}")
+                            
+                except Exception as e:
+                    logger.warning(f"Error listing tables in BigQuery dataset {dataset.dataset_id}: {e}")
+            
+        except ImportError:
+            logger.warning("BigQuery client not available - install with: pip install google-cloud-bigquery")
+        except Exception as e:
+            logger.error(f"Error discovering BigQuery datasets from {conn_name}: {e}")
+            
+        return datasets
+    
+    def _discover_azure_sql_datasets(self, conn_name: str, conn_config: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Discover datasets from Azure SQL Database"""
+        # Azure SQL uses the same protocol as SQL Server, so we can reuse the MSSQL discovery
+        return self._discover_mssql_datasets(conn_name, conn_config)
+    
     def auto_index_datasets(self, datasets):
         """Automatically index new datasets to vector database with duplicate prevention"""
         if not self.vector_engine:
@@ -556,6 +916,8 @@ Owner: {dataset.get('owner', 'Unknown')}
 Source: {dataset.get('source', '')}
 Access Level: {dataset.get('access_level', 'Unknown')}
 Row Count: {dataset.get('row_count', 'Unknown')}
+Schema: {dataset.get('schema_info', 'Unknown')}
+Connection: {dataset.get('connection_name', 'Unknown')}
                     """.strip()
                 )
                 
@@ -569,7 +931,21 @@ Row Count: {dataset.get('row_count', 'Unknown')}
     
     def refresh(self):
         """Refresh dataset list"""
-        self.load_datasets()
+        try:
+            self.status_label.setText("Refreshing datasets...")
+            
+            # Clear existing datasets
+            self.all_datasets = []
+            self.filtered_datasets = []
+            
+            # Reload datasets
+            self.load_datasets()
+            
+            self.status_label.setText(f"Refreshed - Found {len(self.all_datasets)} datasets")
+            
+        except Exception as e:
+            logger.error(f"Error refreshing datasets: {e}")
+            self.status_label.setText(f"Refresh failed: {str(e)}")
         
     def get_selected_datasets(self) -> List[Dict[str, Any]]:
         """Get currently filtered/selected datasets"""
