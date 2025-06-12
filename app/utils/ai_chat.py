@@ -11,6 +11,39 @@ import datetime
 
 logger = logging.getLogger(__name__)
 
+def log_prompt_to_file(prompt: str, model: str, service: str, user_question: str):
+    """Log the AI prompt to a file for debugging"""
+    try:
+        # Create logs directory if it doesn't exist
+        logs_dir = Path("logs")
+        logs_dir.mkdir(exist_ok=True)
+        
+        # Create filename with timestamp
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"ai_prompt_{timestamp}_{service}_{model.replace(':', '_')}.txt"
+        log_file = logs_dir / filename
+        
+        # Write prompt to file
+        with open(log_file, 'w', encoding='utf-8') as f:
+            f.write("=" * 80 + "\n")
+            f.write(f"AI CHAT PROMPT LOG\n")
+            f.write(f"Timestamp: {datetime.datetime.now().isoformat()}\n")
+            f.write(f"Service: {service}\n")
+            f.write(f"Model: {model}\n")
+            f.write(f"User Question: {user_question}\n")
+            f.write("=" * 80 + "\n\n")
+            f.write("FULL PROMPT:\n")
+            f.write("-" * 40 + "\n")
+            f.write(prompt)
+            f.write("\n" + "-" * 40 + "\n")
+            f.write(f"Prompt Length: {len(prompt)} characters\n")
+            f.write(f"Estimated Tokens: {len(prompt) // 4}\n")
+        
+        logger.info(f"Prompt logged to: {log_file}")
+        
+    except Exception as e:
+        logger.error(f"Failed to log prompt to file: {e}")
+
 class AIContextBuilder:
     """Builds context from selected items for AI chat"""
     
