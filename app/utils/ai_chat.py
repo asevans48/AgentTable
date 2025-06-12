@@ -299,43 +299,71 @@ class AIService:
     def chat_with_context(self, user_question: str, selected_items: List[Dict[str, Any]]) -> Dict[str, Any]:
         """Process AI chat request with context"""
         try:
+            logger.info(f"Starting AI chat with question: {user_question[:100]}...")
+            
             # Build context from selected items
             context = self.context_builder.build_context(selected_items, user_question)
+            logger.info(f"Built context with {context['selected_items_count']} items")
             
             # Check which AI services are available
             available_services = self._get_available_ai_services()
+            logger.info(f"Available AI services: {available_services}")
             
             if not available_services:
                 return {
                     'success': False,
-                    'error': 'No AI services configured. Please configure API keys in Settings.',
+                    'error': 'No AI services configured or available. Please check Settings → AI Tools and ensure at least one service is properly configured.',
                     'context': context
                 }
+            
+            # Collect all errors for detailed reporting
+            service_errors = {}
             
             # Try each available service
             for service_name in available_services:
                 try:
+                    logger.info(f"Trying AI service: {service_name}")
                     response = self._call_ai_service(service_name, context)
+                    
                     if response['success']:
+                        logger.info(f"Successfully got response from {service_name}")
                         response['context'] = context
                         response['service_used'] = service_name
                         return response
+                    else:
+                        service_errors[service_name] = response.get('error', 'Unknown error')
+                        logger.warning(f"AI service {service_name} failed: {response.get('error')}")
+                        
                 except Exception as e:
-                    logger.warning(f"AI service {service_name} failed: {e}")
+                    error_msg = str(e)
+                    service_errors[service_name] = error_msg
+                    logger.error(f"AI service {service_name} exception: {e}")
                     continue
             
-            # If all services failed
+            # If all services failed, provide detailed error information
+            error_details = []
+            for service, error in service_errors.items():
+                error_details.append(f"• {service}: {error}")
+            
+            detailed_error = f"All configured AI services failed:\n\n" + "\n".join(error_details)
+            detailed_error += f"\n\nTroubleshooting:\n"
+            detailed_error += f"1. Check your internet connection\n"
+            detailed_error += f"2. Verify API keys in Settings → AI Tools\n"
+            detailed_error += f"3. For local models, ensure Ollama is running: ollama serve\n"
+            detailed_error += f"4. Check the application logs for more details"
+            
             return {
                 'success': False,
-                'error': 'All configured AI services failed. Please check your API keys and network connection.',
-                'context': context
+                'error': detailed_error,
+                'context': context,
+                'service_errors': service_errors
             }
             
         except Exception as e:
             logger.error(f"Error in AI chat: {e}")
             return {
                 'success': False,
-                'error': f'AI chat error: {str(e)}',
+                'error': f'AI chat system error: {str(e)}',
                 'context': {}
             }
     
@@ -343,21 +371,54 @@ class AIService:
         """Get list of available AI services"""
         available = []
         
-        if self.config_manager.is_ai_tool_enabled("anthropic"):
-            api_key = self.config_manager.get_ai_tool_config("anthropic").get("api_key", "")
-            if api_key.strip():
-                available.append("anthropic")
+        # Check Anthropic Claude
+        try:
+            if self.config_manager.is_ai_tool_enabled("anthropic"):
+                api_key = self.config_manager.get_ai_tool_config("anthropic").get("api_key", "")
+                if api_key.strip():
+                    available.append("anthropic")
+                    logger.info("Anthropic Claude service available")
+        except Exception as e:
+            logger.warning(f"Error checking Anthropic availability: {e}")
         
-        if self.config_manager.is_ai_tool_enabled("openai"):
-            api_key = self.config_manager.get_ai_tool_config("openai").get("api_key", "")
-            if api_key.strip():
-                available.append("openai")
+        # Check OpenAI GPT
+        try:
+            if self.config_manager.is_ai_tool_enabled("openai"):
+                api_key = self.config_manager.get_ai_tool_config("openai").get("api_key", "")
+                if api_key.strip():
+                    available.append("openai")
+                    logger.info("OpenAI GPT service available")
+        except Exception as e:
+            logger.warning(f"Error checking OpenAI availability: {e}")
         
-        if self.config_manager.is_ai_tool_enabled("local_models"):
-            endpoint = self.config_manager.get_ai_tool_config("local_models").get("endpoint", "")
-            if endpoint.strip():
-                available.append("local_models")
+        # Check Local Models (Ollama)
+        try:
+            if self.config_manager.is_ai_tool_enabled("local_models"):
+                config = self.config_manager.get_ai_tool_config("local_models")
+                endpoint = config.get("endpoint", "http://localhost:11434")
+                model = config.get("default_model", "qwen2.5:3b")
+                
+                if endpoint.strip() and model.strip():
+                    # Test if Ollama is actually running
+                    import requests
+                    try:
+                        response = requests.get(f"{endpoint}/api/tags", timeout=3)
+                        if response.status_code == 200:
+                            models_data = response.json()
+                            available_models = [m['name'] for m in models_data.get('models', [])]
+                            if model in available_models:
+                                available.append("local_models")
+                                logger.info(f"Local Ollama service available with model: {model}")
+                            else:
+                                logger.warning(f"Local model {model} not found. Available: {available_models}")
+                        else:
+                            logger.warning(f"Ollama API returned status {response.status_code}")
+                    except requests.exceptions.RequestException as e:
+                        logger.warning(f"Cannot connect to Ollama at {endpoint}: {e}")
+        except Exception as e:
+            logger.warning(f"Error checking local models availability: {e}")
         
+        logger.info(f"Available AI services: {available}")
         return available
     
     def _call_ai_service(self, service_name: str, context: Dict[str, Any]) -> Dict[str, Any]:
@@ -464,35 +525,77 @@ class AIService:
             temperature = config.get("temperature", 0.7)
             max_tokens = config.get("max_tokens", 512)
             
+            logger.info(f"Calling local model: {model} at {endpoint}")
+            
             # Build prompt with context
             prompt = self._build_local_prompt(context)
+            logger.debug(f"Prompt length: {len(prompt)} characters")
             
+            # First verify the model is available
+            try:
+                models_response = requests.get(f"{endpoint}/api/tags", timeout=5)
+                if models_response.status_code == 200:
+                    models_data = models_response.json()
+                    available_models = [m['name'] for m in models_data.get('models', [])]
+                    if model not in available_models:
+                        return {
+                            'success': False,
+                            'error': f'Model {model} not found. Available models: {", ".join(available_models)}\nRun: ollama pull {model}'
+                        }
+                else:
+                    return {
+                        'success': False,
+                        'error': f'Cannot verify models at {endpoint}. Status: {models_response.status_code}'
+                    }
+            except requests.exceptions.RequestException as e:
+                return {
+                    'success': False,
+                    'error': f'Cannot connect to Ollama at {endpoint}. Make sure Ollama is running: ollama serve\nError: {str(e)}'
+                }
+            
+            # Make the generation request
+            generation_payload = {
+                "model": model,
+                "prompt": prompt,
+                "stream": False,
+                "options": {
+                    "temperature": temperature,
+                    "num_predict": max_tokens
+                }
+            }
+            
+            logger.debug(f"Sending request to {endpoint}/api/generate")
             response = requests.post(
                 f"{endpoint}/api/generate",
-                json={
-                    "model": model,
-                    "prompt": prompt,
-                    "stream": False,
-                    "options": {
-                        "temperature": temperature,
-                        "num_predict": max_tokens
-                    }
-                },
-                timeout=30
+                json=generation_payload,
+                timeout=60  # Increased timeout for generation
             )
+            
+            logger.info(f"Ollama response status: {response.status_code}")
             
             if response.status_code == 200:
                 result = response.json()
+                ai_response = result.get('response', 'No response received')
+                
+                if not ai_response or ai_response.strip() == '':
+                    return {
+                        'success': False,
+                        'error': f'Model {model} returned empty response. The model may not be properly loaded.'
+                    }
+                
+                logger.info(f"Successfully received response from {model}")
                 return {
                     'success': True,
-                    'response': result.get('response', 'No response received'),
+                    'response': ai_response,
                     'model': model,
                     'service': 'Local Ollama'
                 }
             else:
+                error_text = response.text
+                logger.error(f"Ollama API error: {response.status_code} - {error_text}")
                 return {
                     'success': False,
-                    'error': f'Ollama API error: {response.status_code} - {response.text}'
+                    'error': f'Ollama API error: {response.status_code} - {error_text}'
                 }
                 
         except ImportError:
@@ -500,10 +603,21 @@ class AIService:
                 'success': False,
                 'error': 'Requests library not installed. Run: pip install requests'
             }
-        except Exception as e:
+        except requests.exceptions.Timeout:
             return {
                 'success': False,
-                'error': f'Local model error: {str(e)}'
+                'error': f'Request to {model} timed out. The model may be loading or the query is too complex.'
+            }
+        except requests.exceptions.RequestException as e:
+            return {
+                'success': False,
+                'error': f'Network error connecting to Ollama: {str(e)}'
+            }
+        except Exception as e:
+            logger.error(f"Unexpected error in local model call: {e}")
+            return {
+                'success': False,
+                'error': f'Unexpected local model error: {str(e)}'
             }
     
     def _build_anthropic_prompt(self, context: Dict[str, Any]) -> str:
