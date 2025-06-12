@@ -7,6 +7,7 @@ import logging
 from typing import List, Dict, Any, Optional, Tuple
 from pathlib import Path
 import json
+import datetime
 
 logger = logging.getLogger(__name__)
 
@@ -465,6 +466,9 @@ class AIService:
             logger.info(f"Generated prompt length: {len(prompt)} characters")
             logger.debug(f"Full prompt content:\n{prompt}")
             
+            # Log prompt to file
+            log_prompt_to_file(prompt, model, "Anthropic", context['user_question'])
+            
             logger.info(f"Sending request to Anthropic Claude API")
             response = client.messages.create(
                 model=model,
@@ -515,6 +519,9 @@ class AIService:
             prompt = self._build_openai_prompt(context)
             logger.info(f"Generated prompt length: {len(prompt)} characters")
             logger.debug(f"Full prompt content:\n{prompt}")
+            
+            # Log prompt to file
+            log_prompt_to_file(prompt, model, "OpenAI", context['user_question'])
             
             logger.info(f"Sending request to OpenAI GPT API")
             response = client.chat.completions.create(
@@ -584,6 +591,9 @@ class AIService:
             prompt = self._build_local_prompt(context)
             logger.info(f"Generated prompt length: {len(prompt)} characters")
             logger.debug(f"Full prompt content:\n{prompt}")
+            
+            # Log prompt to file
+            log_prompt_to_file(prompt, model, "Local_Ollama", context['user_question'])
             
             # Make the generation request
             import requests
