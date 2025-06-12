@@ -592,6 +592,7 @@ class AIService:
     def _call_local_model(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """Call local Ollama model with automatic setup"""
         try:
+            import requests
             from utils.ollama_manager import get_ollama_manager
             
             config = self.config_manager.get_ai_tool_config("local_models")
@@ -629,7 +630,6 @@ class AIService:
             log_prompt_to_file(prompt, model, "Local_Ollama", context['user_question'])
             
             # Make the generation request
-            import requests
             generation_payload = {
                 "model": model,
                 "prompt": prompt,
