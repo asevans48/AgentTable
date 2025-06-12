@@ -85,13 +85,57 @@ class AIToolsTab(QWidget):
         
         self.local_model = QComboBox()
         self.local_model.addItems([
-            "qwen2.5:7b", "gemma2:7b", "llama3.1:7b", "mistral:7b"
+            # Large models (7B+)
+            "qwen2.5:14b", "qwen2.5:7b", "qwen2.5:3b", 
+            "llama3.2:3b", "llama3.1:8b", "llama3.1:7b",
+            "gemma2:9b", "gemma2:7b", "gemma2:2b",
+            "mistral:7b", "mistral-nemo:12b",
+            "phi3.5:3.8b", "phi3:3.8b", "phi3:mini",
+            # Medium models (1-3B)
+            "qwen2.5:1.5b", "qwen2.5:0.5b",
+            "llama3.2:1b", "gemma2:2b",
+            "phi3:mini", "phi3.5:mini",
+            "tinyllama:1.1b", "stablelm2:1.6b",
+            # Small models (<1B)
+            "qwen2.5:0.5b", "smollm:360m", "smollm:135m",
+            "tinydolphin:1.1b", "all-minilm:22m",
+            "nomic-embed-text:137m"
         ])
         local_layout.addRow("Default Model:", self.local_model)
         
         self.local_endpoint = QLineEdit()
         self.local_endpoint.setPlaceholderText("http://localhost:11434")
         local_layout.addRow("Ollama Endpoint:", self.local_endpoint)
+        
+        # Advanced local model settings
+        advanced_local = QGroupBox("Advanced Local Model Settings")
+        advanced_layout = QFormLayout(advanced_local)
+        
+        self.context_length = QSpinBox()
+        self.context_length.setRange(512, 32768)
+        self.context_length.setValue(4096)
+        self.context_length.setSuffix(" tokens")
+        advanced_layout.addRow("Context Length:", self.context_length)
+        
+        self.temperature = QDoubleSpinBox()
+        self.temperature.setRange(0.0, 2.0)
+        self.temperature.setValue(0.7)
+        self.temperature.setSingleStep(0.1)
+        self.temperature.setDecimals(1)
+        advanced_layout.addRow("Temperature:", self.temperature)
+        
+        self.max_tokens = QSpinBox()
+        self.max_tokens.setRange(50, 4096)
+        self.max_tokens.setValue(512)
+        self.max_tokens.setSuffix(" tokens")
+        advanced_layout.addRow("Max Response Tokens:", self.max_tokens)
+        
+        # GPU acceleration option
+        self.use_gpu = QCheckBox("Use GPU acceleration (if available)")
+        self.use_gpu.setChecked(True)
+        advanced_layout.addRow(self.use_gpu)
+        
+        scroll_layout.addWidget(advanced_local)
         
         scroll_layout.addWidget(local_group)
         
@@ -115,8 +159,14 @@ class AIToolsTab(QWidget):
         # Local model settings
         local_config = self.config_manager.get_ai_tool_config("local_models")
         self.local_enabled.setChecked(local_config.get("enabled", False))
-        self.local_model.setCurrentText(local_config.get("default_model", "qwen2.5:7b"))
+        self.local_model.setCurrentText(local_config.get("default_model", "qwen2.5:3b"))
         self.local_endpoint.setText(local_config.get("endpoint", "http://localhost:11434"))
+        
+        # Advanced local settings
+        self.context_length.setValue(local_config.get("context_length", 4096))
+        self.temperature.setValue(local_config.get("temperature", 0.7))
+        self.max_tokens.setValue(local_config.get("max_tokens", 512))
+        self.use_gpu.setChecked(local_config.get("use_gpu", True))
         
     def save_settings(self):
         """Save AI tool settings to config"""
@@ -134,6 +184,10 @@ class AIToolsTab(QWidget):
         self.config_manager.set("ai_tools.local_models.enabled", self.local_enabled.isChecked())
         self.config_manager.set("ai_tools.local_models.default_model", self.local_model.currentText())
         self.config_manager.set("ai_tools.local_models.endpoint", self.local_endpoint.text())
+        self.config_manager.set("ai_tools.local_models.context_length", self.context_length.value())
+        self.config_manager.set("ai_tools.local_models.temperature", self.temperature.value())
+        self.config_manager.set("ai_tools.local_models.max_tokens", self.max_tokens.value())
+        self.config_manager.set("ai_tools.local_models.use_gpu", self.use_gpu.isChecked())
 
 class DatabaseTab(QWidget):
     """Tab for configuring database connections"""
