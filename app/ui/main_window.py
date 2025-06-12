@@ -646,6 +646,10 @@ Selected content will be used as context for more accurate and relevant response
         """Handle dataset selection from dataset browser"""
         self.status_bar.showMessage(f"Selected dataset: {dataset_info.get('name', 'Unknown')}")
         
+        # Refresh autocomplete data when datasets change
+        if hasattr(self.search_bar, 'load_autocomplete_data'):
+            self.search_bar.load_autocomplete_data()
+        
     def on_file_metadata_changed(self, file_path, metadata):
         """Handle file metadata changes"""
         self.status_bar.showMessage(f"Updated metadata for: {Path(file_path).name}")
@@ -685,6 +689,10 @@ Selected content will be used as context for more accurate and relevant response
     def on_directory_added(self, directory_path):
         """Handle new directory being added"""
         self.status_bar.showMessage(f"Added directory: {Path(directory_path).name} - Auto-indexing in progress...")
+        
+        # Refresh autocomplete data in search bar
+        if hasattr(self.search_bar, 'load_autocomplete_data'):
+            self.search_bar.load_autocomplete_data()
         
     def show_settings(self):
         """Show settings dialog"""

@@ -5,11 +5,12 @@ Prominent search interface for vector search and AI chat
 
 from PyQt6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QLineEdit, QPushButton, 
-    QComboBox, QLabel, QFrame, QToolButton, QMenu
+    QComboBox, QLabel, QFrame, QToolButton, QMenu, QCompleter, QListWidget, QListWidgetItem
 )
-from PyQt6.QtCore import pyqtSignal
+from PyQt6.QtCore import pyqtSignal, QStringListModel, Qt, QTimer
 from PyQt6.QtGui import QFont, QKeySequence, QShortcut, QAction
 import logging
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -26,9 +27,18 @@ class SearchBar(QWidget):
         self.search_history = []
         self.current_history_index = -1
         
+        # Autocomplete data
+        self.dataset_names = []
+        self.document_names = []
+        self.file_extensions = []
+        self.autocomplete_timer = QTimer()
+        self.autocomplete_timer.setSingleShot(True)
+        self.autocomplete_timer.timeout.connect(self.update_autocomplete_data)
+        
         self.setup_ui()
         self.setup_connections()
         self.load_recent_searches()
+        self.setup_autocomplete()
         
     def setup_ui(self):
         """Setup the search bar UI"""
@@ -211,6 +221,8 @@ class SearchBar(QWidget):
         self.search_input.returnPressed.connect(self.perform_search)
         self.search_type_combo.currentTextChanged.connect(self.on_search_type_changed)
         
+        # Autocomplete connections
+        self.search_input.textChanged.connect(self.on_text_changed)
         
         # Setup keyboard shortcuts
         search_shortcut = QShortcut(QKeySequence("Ctrl+F"), self)
@@ -243,6 +255,9 @@ class SearchBar(QWidget):
         else:
             self.search_input.setPlaceholderText("Search...")
             self.search_button.setText("Search")
+            
+        # Update autocomplete based on search type
+        self.update_autocomplete_for_search_type(search_type)
             
     def perform_search(self):
         """Perform search based on current input and type"""
@@ -352,7 +367,214 @@ class SearchBar(QWidget):
     def save_recent_searches(self):
         """Save recent searches to config"""
         self.config_manager.set("ui_preferences.recent_searches", self.search_history)
+    
+    def setup_autocomplete(self):
+        """Setup autocomplete functionality"""
+        # Create completer
+        self.completer = QCompleter()
+        self.completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        self.completer.setFilterMode(Qt.MatchFlag.MatchContains)
+        self.completer.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
         
+        # Set initial model
+        self.completer_model = QStringListModel()
+        self.completer.setModel(self.completer_model)
+        self.search_input.setCompleter(self.completer)
+        
+        # Load initial autocomplete data
+        self.load_autocomplete_data()
+    
+    def load_autocomplete_data(self):
+        """Load autocomplete data from various sources"""
+        try:
+            # Load dataset names
+            datasets = self.config_manager.get_registered_datasets()
+            self.dataset_names = [dataset['name'] for dataset in datasets if 'name' in dataset]
+            
+            # Load document names from watched directories
+            self.document_names = []
+            self.file_extensions = set()
+            
+            watched_dirs = self.config_manager.get("file_management.watched_directories", [])
+            for directory in watched_dirs:
+                if Path(directory).exists():
+                    try:
+                        # Get file names from directory (limit to prevent performance issues)
+                        file_count = 0
+                        for file_path in Path(directory).rglob("*"):
+                            if file_path.is_file() and file_count < 1000:  # Limit for performance
+                                self.document_names.append(file_path.name)
+                                if file_path.suffix:
+                                    self.file_extensions.add(file_path.suffix.lower())
+                                file_count += 1
+                            elif file_count >= 1000:
+                                break
+                    except Exception as e:
+                        logger.warning(f"Error reading directory {directory}: {e}")
+            
+            # Convert extensions to searchable format
+            self.file_extensions = [ext.lstrip('.') for ext in self.file_extensions if ext]
+            
+            # Update autocomplete for current search type
+            current_type = self.search_type_combo.currentText()
+            self.update_autocomplete_for_search_type(current_type)
+            
+        except Exception as e:
+            logger.error(f"Error loading autocomplete data: {e}")
+    
+    def update_autocomplete_for_search_type(self, search_type):
+        """Update autocomplete suggestions based on search type"""
+        suggestions = []
+        
+        if search_type == "Dataset Search":
+            # Add dataset names
+            suggestions.extend(self.dataset_names)
+            
+            # Add common dataset search terms
+            suggestions.extend([
+                "table:", "view:", "csv:", "json:", "database:",
+                "owner:", "type:", "tags:", "description:"
+            ])
+            
+        elif search_type == "Document Search":
+            # Add document names (limit to prevent overwhelming)
+            suggestions.extend(self.document_names[:500])
+            
+            # Add file extensions
+            suggestions.extend([f"*.{ext}" for ext in self.file_extensions])
+            
+            # Add common document search terms
+            suggestions.extend([
+                "*.pdf", "*.docx", "*.txt", "*.csv", "*.xlsx", "*.json", "*.xml",
+                "*.py", "*.sql", "*.md", "*.html", "*.js", "*.css"
+            ])
+            
+        elif search_type == "Vector Search":
+            # Add semantic search suggestions
+            suggestions.extend([
+                "find documents about", "similar to", "related to",
+                "documents containing", "files with", "data about"
+            ])
+            
+        elif search_type == "SQL Query":
+            # Add SQL keywords and common patterns
+            suggestions.extend([
+                "SELECT * FROM", "SELECT COUNT(*) FROM", "SELECT DISTINCT",
+                "WHERE", "ORDER BY", "GROUP BY", "HAVING", "JOIN", "INNER JOIN",
+                "LEFT JOIN", "RIGHT JOIN", "UNION", "INSERT INTO", "UPDATE",
+                "DELETE FROM", "CREATE TABLE", "ALTER TABLE", "DROP TABLE"
+            ])
+            
+        elif search_type == "AI Chat":
+            # Add common AI chat starters
+            suggestions.extend([
+                "What is", "How does", "Can you explain", "Show me", "Find",
+                "Summarize", "Compare", "Analyze", "What are the differences",
+                "Tell me about", "List all", "Count the", "Calculate"
+            ])
+        
+        # Add search history to suggestions
+        suggestions.extend(self.search_history)
+        
+        # Remove duplicates and sort
+        unique_suggestions = list(set(suggestions))
+        unique_suggestions.sort()
+        
+        # Update completer model
+        self.completer_model.setStringList(unique_suggestions)
+    
+    def on_text_changed(self, text):
+        """Handle text changes for dynamic autocomplete"""
+        # Trigger autocomplete data refresh after a delay
+        self.autocomplete_timer.start(2000)  # 2 second delay
+        
+        # For dataset search, provide dynamic suggestions based on current text
+        if self.search_type_combo.currentText() == "Dataset Search" and len(text) >= 2:
+            self.provide_dynamic_dataset_suggestions(text)
+        elif self.search_type_combo.currentText() == "Document Search" and len(text) >= 2:
+            self.provide_dynamic_document_suggestions(text)
+    
+    def provide_dynamic_dataset_suggestions(self, text):
+        """Provide dynamic suggestions for dataset search"""
+        try:
+            text_lower = text.lower()
+            dynamic_suggestions = []
+            
+            # Search through dataset metadata
+            datasets = self.config_manager.get_registered_datasets()
+            for dataset in datasets:
+                # Check name
+                if text_lower in dataset.get('name', '').lower():
+                    dynamic_suggestions.append(dataset['name'])
+                
+                # Check description
+                description = dataset.get('description', '')
+                if text_lower in description.lower():
+                    # Add relevant words from description
+                    words = description.split()
+                    for word in words:
+                        if len(word) > 3 and text_lower in word.lower():
+                            dynamic_suggestions.append(word)
+                
+                # Check tags
+                for tag in dataset.get('tags', []):
+                    if text_lower in tag.lower():
+                        dynamic_suggestions.append(tag)
+                
+                # Check owner
+                owner = dataset.get('owner', '')
+                if text_lower in owner.lower():
+                    dynamic_suggestions.append(f"owner:{owner}")
+            
+            # Update suggestions if we found any
+            if dynamic_suggestions:
+                current_suggestions = self.completer_model.stringList()
+                combined_suggestions = list(set(current_suggestions + dynamic_suggestions))
+                combined_suggestions.sort()
+                self.completer_model.setStringList(combined_suggestions)
+                
+        except Exception as e:
+            logger.error(f"Error providing dynamic dataset suggestions: {e}")
+    
+    def provide_dynamic_document_suggestions(self, text):
+        """Provide dynamic suggestions for document search"""
+        try:
+            text_lower = text.lower()
+            dynamic_suggestions = []
+            
+            # If text looks like a file extension search
+            if text.startswith('*.') or text.startswith('.'):
+                ext = text.lstrip('*.')
+                matching_extensions = [f"*.{e}" for e in self.file_extensions if e.startswith(ext)]
+                dynamic_suggestions.extend(matching_extensions)
+            
+            # Search through document names
+            for doc_name in self.document_names:
+                if text_lower in doc_name.lower():
+                    dynamic_suggestions.append(doc_name)
+                    
+                    # Also suggest the directory/path context
+                    if '.' in doc_name:
+                        name_without_ext = doc_name.rsplit('.', 1)[0]
+                        if text_lower in name_without_ext.lower():
+                            dynamic_suggestions.append(name_without_ext)
+            
+            # Limit suggestions to prevent performance issues
+            dynamic_suggestions = dynamic_suggestions[:100]
+            
+            # Update suggestions if we found any
+            if dynamic_suggestions:
+                current_suggestions = self.completer_model.stringList()
+                combined_suggestions = list(set(current_suggestions + dynamic_suggestions))
+                combined_suggestions.sort()
+                self.completer_model.setStringList(combined_suggestions)
+                
+        except Exception as e:
+            logger.error(f"Error providing dynamic document suggestions: {e}")
+    
+    def update_autocomplete_data(self):
+        """Update autocomplete data (called by timer)"""
+        self.load_autocomplete_data()
         
     def get_current_query(self):
         """Get the current search query"""
