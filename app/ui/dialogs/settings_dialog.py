@@ -156,6 +156,19 @@ class AIToolsTab(QWidget):
         
         scroll_layout.addWidget(advanced_local)
         
+        # Model status display
+        self.model_status_label = QLabel("Click 'Verify Model' to check availability")
+        self.model_status_label.setWordWrap(True)
+        self.model_status_label.setStyleSheet("""
+            QLabel {
+                color: #6c757d;
+                font-size: 8pt;
+                padding: 2px;
+                margin: 2px 0;
+            }
+        """)
+        local_layout.addRow("Status:", self.model_status_label)
+        
         scroll_layout.addWidget(local_group)
         
         scroll_area.setWidget(scroll_widget)
