@@ -577,25 +577,485 @@ class SearchWorker(QThread):
         
     def search_datasets(self) -> List[Dict[str, Any]]:
         """Search registered datasets"""
-        datasets = self.config_manager.get_registered_datasets()
-        # Filter datasets based on query
-        # This is a placeholder implementation
-        return []
+        try:
+            datasets = self.config_manager.get_registered_datasets()
+            
+            if not datasets:
+                return [{
+                    'title': 'No Datasets Found',
+                    'source_type': 'Info',
+                    'source_path': 'system',
+                    'summary': 'No datasets are currently registered. Please add datasets in the Datasets tab.',
+                    'owner': 'System',
+                    'last_modified': '',
+                    'access_level': 'Full',
+                    'can_chat': False,
+                    'score': 0.0
+                }]
+            
+            # Filter datasets based on query
+            query_lower = self.query.lower()
+            matching_datasets = []
+            
+            for dataset in datasets:
+                # Check if query matches dataset name, description, tags, or owner
+                name_match = query_lower in dataset.get('name', '').lower()
+                desc_match = query_lower in dataset.get('description', '').lower()
+                owner_match = query_lower in dataset.get('owner', '').lower()
+                tag_match = any(query_lower in tag.lower() for tag in dataset.get('tags', []))
+                type_match = query_lower in dataset.get('type', '').lower()
+                
+                if name_match or desc_match or owner_match or tag_match or type_match:
+                    # Calculate relevance score
+                    score = 0.0
+                    if name_match:
+                        score += 1.0
+                    if desc_match:
+                        score += 0.7
+                    if owner_match:
+                        score += 0.5
+                    if tag_match:
+                        score += 0.6
+                    if type_match:
+                        score += 0.4
+                    
+                    matching_datasets.append({
+                        'title': dataset['name'],
+                        'source_type': 'Dataset',
+                        'source_path': f"dataset://{dataset['name']}",
+                        'summary': dataset.get('description', 'No description available'),
+                        'owner': dataset.get('owner', 'Unknown'),
+                        'last_modified': dataset.get('last_modified', ''),
+                        'access_level': dataset.get('access_level', 'Unknown'),
+                        'can_chat': True,
+                        'score': score,
+                        'file_type': dataset.get('type', 'Unknown'),
+                        'fileset_name': dataset['name'],
+                        'schema_info': dataset.get('schema_info', ''),
+                        'tags': dataset.get('tags', []),
+                        'user_description': dataset.get('description', ''),
+                        'is_dataset': True
+                    })
+            
+            # Sort by relevance score
+            matching_datasets.sort(key=lambda x: x['score'], reverse=True)
+            
+            if not matching_datasets:
+                return [{
+                    'title': 'No Matching Datasets',
+                    'source_type': 'Info',
+                    'source_path': 'system',
+                    'summary': f'No datasets found matching "{self.query}". Try different keywords or check dataset names and descriptions.',
+                    'owner': 'System',
+                    'last_modified': '',
+                    'access_level': 'Full',
+                    'can_chat': False,
+                    'score': 0.0
+                }]
+            
+            return matching_datasets
+            
+        except Exception as e:
+            return [{
+                'title': 'Dataset Search Error',
+                'source_type': 'Error',
+                'source_path': 'system',
+                'summary': f'Error searching datasets: {str(e)}',
+                'owner': 'System',
+                'last_modified': '',
+                'access_level': 'Full',
+                'can_chat': False,
+                'score': 0.0
+            }]
         
     def search_documents(self) -> List[Dict[str, Any]]:
         """Search documents in watched directories"""
-        # Placeholder implementation
-        return []
+        try:
+            from pathlib import Path
+            import os
+            
+            watched_dirs = self.config_manager.get("file_management.watched_directories", [])
+            
+            if not watched_dirs:
+                return [{
+                    'title': 'No Watched Directories',
+                    'source_type': 'Info',
+                    'source_path': 'system',
+                    'summary': 'No directories are being watched. Please add directories in the Files tab.',
+                    'owner': 'System',
+                    'last_modified': '',
+                    'access_level': 'Full',
+                    'can_chat': False,
+                    'score': 0.0
+                }]
+            
+            matching_files = []
+            query_lower = self.query.lower()
+            
+            for directory in watched_dirs:
+                if not Path(directory).exists():
+                    continue
+                    
+                # Search through files in directory
+                for root, dirs, files in os.walk(directory):
+                    for file in files:
+                        file_path = Path(root) / file
+                        
+                        # Check if query matches filename or extension
+                        name_match = query_lower in file.lower()
+                        ext_match = query_lower in file_path.suffix.lower()
+                        
+                        if name_match or ext_match:
+                            # Calculate relevance score
+                            score = 0.0
+                            if query_lower == file.lower():
+                                score = 1.0  # Exact match
+                            elif file.lower().startswith(query_lower):
+                                score = 0.8  # Starts with query
+                            elif name_match:
+                                score = 0.6  # Contains query
+                            elif ext_match:
+                                score = 0.4  # Extension match
+                            
+                            # Get file stats
+                            try:
+                                stat = file_path.stat()
+                                last_modified = stat.st_mtime
+                                file_size = stat.st_size
+                                
+                                # Format last modified
+                                import datetime
+                                last_mod_str = datetime.datetime.fromtimestamp(last_modified).strftime('%Y-%m-%d %H:%M')
+                                
+                                # Format file size
+                                if file_size < 1024:
+                                    size_str = f"{file_size} B"
+                                elif file_size < 1024 * 1024:
+                                    size_str = f"{file_size / 1024:.1f} KB"
+                                else:
+                                    size_str = f"{file_size / (1024 * 1024):.1f} MB"
+                                
+                                summary = f"File size: {size_str}\nLocation: {root}"
+                                
+                            except Exception:
+                                last_mod_str = 'Unknown'
+                                summary = f"Location: {root}"
+                            
+                            matching_files.append({
+                                'title': file,
+                                'source_type': 'Document',
+                                'source_path': str(file_path),
+                                'summary': summary,
+                                'owner': Path(directory).name,
+                                'last_modified': last_mod_str,
+                                'access_level': 'Full',
+                                'can_chat': True,
+                                'score': score,
+                                'file_type': file_path.suffix.lstrip('.').upper() or 'Unknown',
+                                'fileset_name': Path(directory).name,
+                                'schema_info': '',
+                                'tags': ['document', 'file'],
+                                'user_description': '',
+                                'is_dataset': False
+                            })
+            
+            # Sort by relevance score
+            matching_files.sort(key=lambda x: x['score'], reverse=True)
+            
+            # Limit results to prevent overwhelming UI
+            matching_files = matching_files[:50]
+            
+            if not matching_files:
+                return [{
+                    'title': 'No Matching Documents',
+                    'source_type': 'Info',
+                    'source_path': 'system',
+                    'summary': f'No documents found matching "{self.query}" in watched directories. Try different keywords or add more directories.',
+                    'owner': 'System',
+                    'last_modified': '',
+                    'access_level': 'Full',
+                    'can_chat': False,
+                    'score': 0.0
+                }]
+            
+            return matching_files
+            
+        except Exception as e:
+            return [{
+                'title': 'Document Search Error',
+                'source_type': 'Error',
+                'source_path': 'system',
+                'summary': f'Error searching documents: {str(e)}',
+                'owner': 'System',
+                'last_modified': '',
+                'access_level': 'Full',
+                'can_chat': False,
+                'score': 0.0
+            }]
         
     def execute_sql_query(self) -> List[Dict[str, Any]]:
         """Execute SQL query"""
-        # Placeholder implementation
-        return []
+        try:
+            from utils.database.connection_manager import DatabaseConnectionManager
+            
+            # Get database connections
+            db_connections = self.config_manager.get("database.connections", {})
+            
+            if not db_connections:
+                return [{
+                    'title': 'No Database Connections',
+                    'source_type': 'Info',
+                    'source_path': 'system',
+                    'summary': 'No database connections configured. Please add database connections in Settings.',
+                    'owner': 'System',
+                    'last_modified': '',
+                    'access_level': 'Full',
+                    'can_chat': False,
+                    'score': 0.0
+                }]
+            
+            # Use the first available connection for now
+            # In a real implementation, you'd want to let users select which database
+            connection_name = list(db_connections.keys())[0]
+            
+            try:
+                db_manager = DatabaseConnectionManager(self.config_manager)
+                connection = db_manager.get_connection(connection_name)
+                
+                if not connection:
+                    return [{
+                        'title': 'Database Connection Failed',
+                        'source_type': 'Error',
+                        'source_path': 'system',
+                        'summary': f'Could not connect to database: {connection_name}',
+                        'owner': 'System',
+                        'last_modified': '',
+                        'access_level': 'Full',
+                        'can_chat': False,
+                        'score': 0.0
+                    }]
+                
+                # Execute the query
+                cursor = connection.cursor()
+                cursor.execute(self.query)
+                
+                # Get column names
+                columns = [desc[0] for desc in cursor.description] if cursor.description else []
+                
+                # Fetch results
+                rows = cursor.fetchall()
+                
+                if not rows:
+                    return [{
+                        'title': 'Query Executed Successfully',
+                        'source_type': 'SQL Result',
+                        'source_path': f'database://{connection_name}',
+                        'summary': 'Query executed successfully but returned no results.',
+                        'owner': connection_name,
+                        'last_modified': '',
+                        'access_level': 'Full',
+                        'can_chat': False,
+                        'score': 1.0
+                    }]
+                
+                # Format results
+                results = []
+                for i, row in enumerate(rows[:20]):  # Limit to first 20 rows
+                    row_data = dict(zip(columns, row))
+                    
+                    # Create a summary of the row data
+                    summary_parts = []
+                    for col, val in list(row_data.items())[:5]:  # Show first 5 columns
+                        summary_parts.append(f"{col}: {val}")
+                    
+                    if len(row_data) > 5:
+                        summary_parts.append(f"... and {len(row_data) - 5} more columns")
+                    
+                    results.append({
+                        'title': f'Row {i + 1}',
+                        'source_type': 'SQL Result',
+                        'source_path': f'database://{connection_name}/row/{i}',
+                        'summary': '\n'.join(summary_parts),
+                        'owner': connection_name,
+                        'last_modified': '',
+                        'access_level': 'Full',
+                        'can_chat': True,
+                        'score': 1.0,
+                        'file_type': 'SQL',
+                        'fileset_name': connection_name,
+                        'schema_info': f"Columns: {', '.join(columns)}",
+                        'tags': ['sql', 'database', 'query-result'],
+                        'user_description': f'SQL query result from {connection_name}',
+                        'is_dataset': False,
+                        'sql_data': row_data
+                    })
+                
+                # Add summary result at the top
+                summary_result = {
+                    'title': f'SQL Query Results ({len(rows)} rows)',
+                    'source_type': 'SQL Summary',
+                    'source_path': f'database://{connection_name}',
+                    'summary': f'Query executed successfully.\nReturned {len(rows)} rows with {len(columns)} columns.\nColumns: {", ".join(columns)}',
+                    'owner': connection_name,
+                    'last_modified': '',
+                    'access_level': 'Full',
+                    'can_chat': True,
+                    'score': 1.0,
+                    'file_type': 'SQL',
+                    'fileset_name': connection_name,
+                    'schema_info': f"Columns: {', '.join(columns)}",
+                    'tags': ['sql', 'database', 'summary'],
+                    'user_description': f'SQL query summary from {connection_name}',
+                    'is_dataset': False
+                }
+                
+                return [summary_result] + results
+                
+            except Exception as e:
+                return [{
+                    'title': 'SQL Query Error',
+                    'source_type': 'Error',
+                    'source_path': 'system',
+                    'summary': f'Error executing SQL query: {str(e)}\n\nQuery: {self.query}',
+                    'owner': 'System',
+                    'last_modified': '',
+                    'access_level': 'Full',
+                    'can_chat': False,
+                    'score': 0.0
+                }]
+                
+        except ImportError:
+            return [{
+                'title': 'Database Module Unavailable',
+                'source_type': 'Error',
+                'source_path': 'system',
+                'summary': 'Database connection module not available. Please check your database configuration.',
+                'owner': 'System',
+                'last_modified': '',
+                'access_level': 'Full',
+                'can_chat': False,
+                'score': 0.0
+            }]
+        except Exception as e:
+            return [{
+                'title': 'SQL Query Error',
+                'source_type': 'Error',
+                'source_path': 'system',
+                'summary': f'Unexpected error executing SQL query: {str(e)}',
+                'owner': 'System',
+                'last_modified': '',
+                'access_level': 'Full',
+                'can_chat': False,
+                'score': 0.0
+            }]
         
     def perform_general_search(self) -> List[Dict[str, Any]]:
         """Perform general search across all sources"""
-        # Placeholder implementation
-        return []
+        try:
+            # For AI Chat, we need to work with selected items from search results
+            if self.search_type == "AI Chat":
+                return self.handle_ai_chat()
+            
+            # For other search types, combine results from multiple sources
+            all_results = []
+            
+            # Search datasets
+            try:
+                dataset_results = self.search_datasets()
+                all_results.extend(dataset_results)
+            except Exception as e:
+                logger.error(f"Error in dataset search: {e}")
+            
+            # Search documents
+            try:
+                document_results = self.search_documents()
+                all_results.extend(document_results)
+            except Exception as e:
+                logger.error(f"Error in document search: {e}")
+            
+            # Search vector database
+            try:
+                vector_results = self.perform_vector_search()
+                all_results.extend(vector_results)
+            except Exception as e:
+                logger.error(f"Error in vector search: {e}")
+            
+            # Remove duplicates and sort by relevance
+            seen_paths = set()
+            unique_results = []
+            for result in all_results:
+                path = result.get('source_path', '')
+                if path not in seen_paths:
+                    seen_paths.add(path)
+                    unique_results.append(result)
+            
+            # Sort by score
+            unique_results.sort(key=lambda x: x.get('score', 0), reverse=True)
+            
+            return unique_results[:30]  # Limit to top 30 results
+            
+        except Exception as e:
+            return [{
+                'title': 'General Search Error',
+                'source_type': 'Error',
+                'source_path': 'system',
+                'summary': f'Error performing general search: {str(e)}',
+                'owner': 'System',
+                'last_modified': '',
+                'access_level': 'Full',
+                'can_chat': False,
+                'score': 0.0
+            }]
+    
+    def handle_ai_chat(self) -> List[Dict[str, Any]]:
+        """Handle AI chat with selected items"""
+        try:
+            # This would need to be called with selected items from the UI
+            # For now, return a placeholder that explains how AI chat works
+            return [{
+                'title': 'AI Chat Ready',
+                'source_type': 'AI Chat',
+                'source_path': 'ai://chat',
+                'summary': f'''AI Chat Query: "{self.query}"
+
+To use AI Chat effectively:
+1. First perform a search to find relevant documents/datasets
+2. Select the items you want to chat about using the checkboxes
+3. Then use AI Chat to ask questions about the selected content
+
+Selected items will be used as context for the AI conversation.
+
+Available AI models:
+• Claude (Anthropic) - Advanced reasoning and analysis
+• GPT (OpenAI) - General purpose conversations
+• Local Models - Privacy-focused local processing
+
+Note: AI chat functionality requires API keys to be configured in Settings.''',
+                'owner': 'AI Assistant',
+                'last_modified': '',
+                'access_level': 'Full',
+                'can_chat': True,
+                'score': 1.0,
+                'file_type': 'AI',
+                'fileset_name': 'AI Chat',
+                'schema_info': '',
+                'tags': ['ai', 'chat', 'assistant'],
+                'user_description': 'AI Chat interface for querying selected content',
+                'is_dataset': False
+            }]
+            
+        except Exception as e:
+            return [{
+                'title': 'AI Chat Error',
+                'source_type': 'Error',
+                'source_path': 'system',
+                'summary': f'Error setting up AI chat: {str(e)}',
+                'owner': 'System',
+                'last_modified': '',
+                'access_level': 'Full',
+                'can_chat': False,
+                'score': 0.0
+            }]
         
 
 class SearchResults(QWidget):

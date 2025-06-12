@@ -560,9 +560,15 @@ class MainWindow(QMainWindow):
         """Handle AI chat request"""
         self.status_bar.showMessage(f"AI Chat: {message}")
         
-        # For now, treat chat as a special search type
-        # In the future, this would integrate with AI chat functionality
-        self.search_results.perform_search(message, "AI Chat")
+        # Get selected items from search results
+        selected_items = self.search_results.get_selected_items()
+        
+        if not selected_items:
+            # If no items selected, show AI chat interface anyway
+            self.search_results.perform_search(message, "AI Chat")
+        else:
+            # Process AI chat with selected context
+            self.process_ai_chat_with_context(message, selected_items)
         
     def on_file_selected(self, file_path):
         """Handle file selection from file browser"""

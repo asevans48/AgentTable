@@ -57,10 +57,10 @@ class SearchBar(QWidget):
         self.search_type_combo = QComboBox()
         self.search_type_combo.addItems([
             "Vector Search",
+            "Document Search", 
+            "Dataset Search",
             "AI Chat",
-            "SQL Query",
-            "Document Search",
-            "Dataset Search"
+            "SQL Query"
         ])
         self.search_type_combo.setMinimumWidth(120)
         self.search_type_combo.setToolTip("Select search type")
@@ -226,13 +226,19 @@ class SearchBar(QWidget):
     def on_search_type_changed(self, search_type):
         """Handle search type changes"""
         if search_type == "AI Chat":
-            self.search_input.setPlaceholderText("Ask questions about your data...")
-            self.search_button.setText("Send")
+            self.search_input.setPlaceholderText("Ask questions about selected items...")
+            self.search_button.setText("Chat")
         elif search_type == "SQL Query":
-            self.search_input.setPlaceholderText("Enter SQL query...")
+            self.search_input.setPlaceholderText("SELECT * FROM table_name WHERE...")
             self.search_button.setText("Execute")
         elif search_type == "Vector Search":
-            self.search_input.setPlaceholderText("Search documents and data...")
+            self.search_input.setPlaceholderText("Search for similar content using AI...")
+            self.search_button.setText("Search")
+        elif search_type == "Document Search":
+            self.search_input.setPlaceholderText("Search document names and files...")
+            self.search_button.setText("Search")
+        elif search_type == "Dataset Search":
+            self.search_input.setPlaceholderText("Search dataset names and descriptions...")
             self.search_button.setText("Search")
         else:
             self.search_input.setPlaceholderText("Search...")
