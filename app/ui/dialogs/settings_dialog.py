@@ -91,6 +91,8 @@ class AIToolsTab(QWidget):
             "gemma2:9b", "gemma2:7b", "gemma2:2b",
             "mistral:7b", "mistral-nemo:12b",
             "phi3.5:3.8b", "phi3:3.8b", "phi3:mini",
+            # Gemma 3 models (<5B)
+            "gemma3:2b", "gemma3:1.5b", "gemma3:1b",
             # Medium models (1-3B)
             "qwen2.5:1.5b", "qwen2.5:0.5b",
             "llama3.2:1b", "gemma2:2b",
@@ -102,6 +104,23 @@ class AIToolsTab(QWidget):
             "nomic-embed-text:137m"
         ])
         local_layout.addRow("Default Model:", self.local_model)
+        
+        # Model verification button
+        verify_model_btn = QPushButton("Verify Model")
+        verify_model_btn.setToolTip("Check if the selected model is available in Ollama")
+        verify_model_btn.clicked.connect(self.verify_local_model)
+        verify_model_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #17a2b8;
+                color: white;
+                border: none;
+                padding: 6px 12px;
+                border-radius: 4px;
+                font-weight: bold;
+            }
+            QPushButton:hover { background-color: #138496; }
+        """)
+        local_layout.addRow("", verify_model_btn)
         
         self.local_endpoint = QLineEdit()
         self.local_endpoint.setPlaceholderText("http://localhost:11434")
@@ -168,6 +187,60 @@ class AIToolsTab(QWidget):
         self.max_tokens.setValue(local_config.get("max_tokens", 512))
         self.use_gpu.setChecked(local_config.get("use_gpu", True))
         
+    def verify_local_model(self):
+        """Verify that the selected local model is available"""
+        model_name = self.local_model.currentText()
+        endpoint = self.local_endpoint.text() or "http://localhost:11434"
+        
+        try:
+            import requests
+            import json
+            
+            self.model_status_label.setText("🔄 Checking model availability...")
+            self.model_status_label.setStyleSheet("color: #ffc107;")
+            
+            # Check if Ollama is running
+            try:
+                response = requests.get(f"{endpoint}/api/tags", timeout=5)
+                if response.status_code == 200:
+                    models_data = response.json()
+                    available_models = [model['name'] for model in models_data.get('models', [])]
+                    
+                    if model_name in available_models:
+                        self.model_status_label.setText(f"✅ {model_name} is available and ready")
+                        self.model_status_label.setStyleSheet("color: #28a745; font-weight: bold;")
+                    else:
+                        # Show available models for reference
+                        available_list = ", ".join(available_models[:5])
+                        if len(available_models) > 5:
+                            available_list += f" (+{len(available_models) - 5} more)"
+                        
+                        self.model_status_label.setText(
+                            f"⚠️ {model_name} not found. Available: {available_list}\n"
+                            f"Run: ollama pull {model_name}"
+                        )
+                        self.model_status_label.setStyleSheet("color: #ffc107;")
+                else:
+                    self.model_status_label.setText(f"❌ Ollama API error: {response.status_code}")
+                    self.model_status_label.setStyleSheet("color: #dc3545;")
+                    
+            except requests.exceptions.ConnectionError:
+                self.model_status_label.setText(
+                    f"❌ Cannot connect to Ollama at {endpoint}\n"
+                    "Make sure Ollama is running: ollama serve"
+                )
+                self.model_status_label.setStyleSheet("color: #dc3545;")
+            except requests.exceptions.Timeout:
+                self.model_status_label.setText("⏱️ Connection timeout - Ollama may be starting up")
+                self.model_status_label.setStyleSheet("color: #ffc107;")
+                
+        except ImportError:
+            self.model_status_label.setText("❌ 'requests' library required for verification\nRun: pip install requests")
+            self.model_status_label.setStyleSheet("color: #dc3545;")
+        except Exception as e:
+            self.model_status_label.setText(f"❌ Verification error: {str(e)}")
+            self.model_status_label.setStyleSheet("color: #dc3545;")
+    
     def save_settings(self):
         """Save AI tool settings to config"""
         # Claude settings
