@@ -49,11 +49,14 @@ class AIContextBuilder:
     
     def __init__(self, config_manager):
         self.config_manager = config_manager
-        self.max_context_tokens = 8000  # Conservative limit for context
-        self.max_sample_rows = 10  # Maximum rows to include in data samples
+        self.max_context_tokens = 4000  # Reduced limit for better performance
+        self.max_sample_rows = 5  # Reduced sample rows
+        self.max_content_preview = 500  # Maximum characters for content preview
+        self.max_files_in_context = 3  # Maximum files to include
+        self.max_datasets_in_context = 3  # Maximum datasets to include
         
     def build_context(self, selected_items: List[Dict[str, Any]], user_question: str) -> Dict[str, Any]:
-        """Build comprehensive context from selected items"""
+        """Build comprehensive context from selected items with size limits"""
         context = {
             'user_question': user_question,
             'selected_items_count': len(selected_items),
@@ -62,29 +65,48 @@ class AIContextBuilder:
             'metadata_summary': '',
             'data_samples': [],
             'schema_info': [],
-            'total_tokens_estimate': 0
+            'total_tokens_estimate': 0,
+            'truncated': False,
+            'truncation_info': ''
         }
         
         # Separate files and datasets
         files = [item for item in selected_items if item['type'] == 'file']
         datasets = [item for item in selected_items if item['type'] == 'dataset']
         
-        # Process files
-        for file_item in files:
+        # Limit the number of items to process
+        files_to_process = files[:self.max_files_in_context]
+        datasets_to_process = datasets[:self.max_datasets_in_context]
+        
+        # Track if we truncated
+        if len(files) > self.max_files_in_context or len(datasets) > self.max_datasets_in_context:
+            context['truncated'] = True
+            context['truncation_info'] = f"Showing {len(files_to_process)}/{len(files)} files and {len(datasets_to_process)}/{len(datasets)} datasets"
+        
+        # Process files with size monitoring
+        for file_item in files_to_process:
             file_context = self._process_file_item(file_item)
             if file_context:
                 context['files'].append(file_context)
+                # Check if we're getting too large
+                if self._estimate_tokens(context) > self.max_context_tokens:
+                    context['truncated'] = True
+                    break
                 
-        # Process datasets
-        for dataset_item in datasets:
+        # Process datasets with size monitoring
+        for dataset_item in datasets_to_process:
             dataset_context = self._process_dataset_item(dataset_item)
             if dataset_context:
                 context['datasets'].append(dataset_context)
+                # Check if we're getting too large
+                if self._estimate_tokens(context) > self.max_context_tokens:
+                    context['truncated'] = True
+                    break
                 
         # Build metadata summary
         context['metadata_summary'] = self._build_metadata_summary(context)
         
-        # Estimate token usage
+        # Final token estimate
         context['total_tokens_estimate'] = self._estimate_tokens(context)
         
         return context
@@ -114,7 +136,7 @@ class AIContextBuilder:
                     file_path_obj = Path(file_path)
                     if file_path_obj.suffix.lower() in ['.txt', '.md', '.py', '.sql', '.json', '.csv']:
                         with open(file_path_obj, 'r', encoding='utf-8', errors='ignore') as f:
-                            content = f.read(2000)  # Read first 2000 characters
+                            content = f.read(self.max_content_preview)  # Use configurable limit
                             file_context['content_preview'] = content
                             
                         # For CSV files, try to extract schema
@@ -176,12 +198,12 @@ class AIContextBuilder:
             import pandas as pd
             
             # Read just the first few rows to get schema
-            df = pd.read_csv(file_path, nrows=5)
+            df = pd.read_csv(file_path, nrows=3)  # Reduced sample size
             
             schema = {
-                'columns': list(df.columns),
-                'dtypes': {col: str(dtype) for col, dtype in df.dtypes.items()},
-                'sample_data': df.head(3).to_dict('records') if len(df) > 0 else []
+                'columns': list(df.columns)[:10],  # Limit columns shown
+                'dtypes': {col: str(dtype) for col, dtype in list(df.dtypes.items())[:10]},  # Limit dtypes
+                'sample_data': df.head(2).to_dict('records') if len(df) > 0 else []  # Reduced sample
             }
             
             return schema
@@ -202,15 +224,15 @@ class AIContextBuilder:
             }
             
             if isinstance(data, dict):
-                structure['keys'] = list(data.keys())
+                structure['keys'] = list(data.keys())[:8]  # Limit keys shown
                 # Include a small sample
-                sample = {k: v for k, v in list(data.items())[:5]}
+                sample = {k: v for k, v in list(data.items())[:3]}  # Reduced sample
                 structure['sample_data'] = sample
             elif isinstance(data, list) and len(data) > 0:
                 structure['length'] = len(data)
                 if isinstance(data[0], dict):
-                    structure['item_keys'] = list(data[0].keys())
-                structure['sample_data'] = data[:3]  # First 3 items
+                    structure['item_keys'] = list(data[0].keys())[:8]  # Limit keys
+                structure['sample_data'] = data[:2]  # Reduced to 2 items
             
             return structure
             
@@ -269,19 +291,23 @@ class AIContextBuilder:
             cursor.execute(f"SELECT * FROM {dataset_name} LIMIT {self.max_sample_rows}")
             
             columns = [desc[0] for desc in cursor.description] if cursor.description else []
+            # Limit columns to prevent overly wide data
+            columns = columns[:8]
             rows = cursor.fetchall()
             
             if rows:
                 sample_data = []
                 for row in rows:
-                    sample_data.append(dict(zip(columns, row)))
+                    # Only include limited columns
+                    limited_row = row[:len(columns)]
+                    sample_data.append(dict(zip(columns, limited_row)))
                 
                 return {
                     'type': 'database_sample',
                     'columns': columns,
                     'data': sample_data,
                     'row_count': len(rows),
-                    'note': f'Sample of {len(rows)} rows from {dataset_name}'
+                    'note': f'Sample of {len(rows)} rows from {dataset_name} (showing {len(columns)} columns)'
                 }
             
             return None
@@ -599,7 +625,7 @@ class AIService:
             endpoint = config.get("endpoint", "http://localhost:11434")
             model = config.get("default_model", "qwen2.5:3b")
             temperature = config.get("temperature", 0.7)
-            max_tokens = config.get("max_tokens", 512)
+            max_tokens = config.get("max_tokens", 1024)  # Increased for better responses
             
             logger.info(f"=== LOCAL MODEL REQUEST ===")
             logger.info(f"Model: {model}")
@@ -629,6 +655,14 @@ class AIService:
             # Log prompt to file
             log_prompt_to_file(prompt, model, "Local_Ollama", context['user_question'])
             
+            # Check prompt size and warn if too large
+            prompt_length = len(prompt)
+            estimated_tokens = prompt_length // 4
+            logger.info(f"Prompt length: {prompt_length} chars, estimated tokens: {estimated_tokens}")
+            
+            if estimated_tokens > 6000:
+                logger.warning(f"Large prompt detected ({estimated_tokens} tokens). Consider reducing context.")
+            
             # Make the generation request
             generation_payload = {
                 "model": model,
@@ -636,7 +670,10 @@ class AIService:
                 "stream": False,
                 "options": {
                     "temperature": temperature,
-                    "num_predict": max_tokens
+                    "num_predict": max_tokens,
+                    "num_ctx": 8192,  # Set context window size
+                    "top_k": 40,
+                    "top_p": 0.9
                 }
             }
             
@@ -718,99 +755,93 @@ class AIService:
         return self._build_enhanced_local_prompt(context)
     
     def _build_enhanced_local_prompt(self, context: Dict[str, Any]) -> str:
-        """Build enhanced prompt specifically optimized for local models like Gemma"""
+        """Build enhanced prompt specifically optimized for local models like Gemma3"""
         prompt_parts = []
         
-        # Clear system instruction for local models
+        # Start with system instruction
         prompt_parts.append("You are a helpful data analyst assistant. Analyze the provided data context and answer the user's question accurately.")
         prompt_parts.append("")
         
-        # Emphasize the user's question prominently
-        prompt_parts.append("=== USER QUESTION ===")
-        prompt_parts.append(context['user_question'])
-        prompt_parts.append("")
-        
-        # Add context information with clear structure
+        # Add context information with clear structure FIRST
         if context['selected_items_count'] > 0:
             prompt_parts.append("=== DATA CONTEXT ===")
-            prompt_parts.append(f"The user has selected {context['selected_items_count']} data items for analysis:")
+            
+            # Show truncation info if applicable
+            if context.get('truncated'):
+                prompt_parts.append(f"Note: {context.get('truncation_info', 'Context was truncated for optimal processing')}")
+                prompt_parts.append("")
+            
+            prompt_parts.append(f"Selected {context['selected_items_count']} data items:")
             prompt_parts.append("")
             
-            # Process files with enhanced formatting
+            # Process files with compact formatting
             for i, file_ctx in enumerate(context.get('files', []), 1):
-                prompt_parts.append(f"--- FILE {i}: {file_ctx['name']} ---")
-                prompt_parts.append(f"File Type: {file_ctx['type']}")
-                prompt_parts.append(f"Location: {file_ctx.get('path', 'Unknown')}")
+                prompt_parts.append(f"FILE {i}: {file_ctx['name']} ({file_ctx['type']})")
                 
                 if file_ctx.get('summary'):
-                    prompt_parts.append(f"Summary: {file_ctx['summary']}")
+                    # Truncate summary for local models
+                    summary = file_ctx['summary'][:200] + "..." if len(file_ctx['summary']) > 200 else file_ctx['summary']
+                    prompt_parts.append(f"Summary: {summary}")
                 
                 if file_ctx.get('schema'):
                     schema = file_ctx['schema']
-                    if isinstance(schema, dict):
-                        if 'columns' in schema:
-                            prompt_parts.append(f"Columns: {', '.join(schema['columns'])}")
-                        if 'sample_data' in schema and schema['sample_data']:
-                            prompt_parts.append("Sample Data:")
-                            for j, row in enumerate(schema['sample_data'][:3]):
-                                prompt_parts.append(f"  Row {j+1}: {row}")
-                    else:
-                        prompt_parts.append(f"Schema: {schema}")
+                    if isinstance(schema, dict) and 'columns' in schema:
+                        # Show only first few columns
+                        cols = schema['columns'][:6]
+                        prompt_parts.append(f"Columns: {', '.join(cols)}")
+                        if len(schema['columns']) > 6:
+                            prompt_parts.append(f"... and {len(schema['columns']) - 6} more columns")
                 
                 if file_ctx.get('content_preview'):
-                    content = file_ctx['content_preview'][:800]  # Limit for local models
-                    prompt_parts.append(f"Content Preview:")
-                    prompt_parts.append(content)
+                    # Significantly reduced content for local models
+                    content = file_ctx['content_preview'][:300]
+                    prompt_parts.append(f"Content: {content}")
+                    if len(file_ctx['content_preview']) > 300:
+                        prompt_parts.append("... (truncated)")
                 
                 prompt_parts.append("")
             
-            # Process datasets with enhanced formatting
+            # Process datasets with compact formatting
             for i, dataset_ctx in enumerate(context.get('datasets', []), 1):
-                prompt_parts.append(f"--- DATASET {i}: {dataset_ctx['name']} ---")
-                prompt_parts.append(f"Dataset Type: {dataset_ctx['type']}")
+                prompt_parts.append(f"DATASET {i}: {dataset_ctx['name']} ({dataset_ctx['type']})")
                 
                 if dataset_ctx.get('description'):
-                    prompt_parts.append(f"Description: {dataset_ctx['description']}")
-                
-                if dataset_ctx.get('tags'):
-                    tags = dataset_ctx['tags']
-                    if isinstance(tags, list):
-                        prompt_parts.append(f"Tags: {', '.join(tags)}")
-                    else:
-                        prompt_parts.append(f"Tags: {tags}")
+                    # Truncate description
+                    desc = dataset_ctx['description'][:150] + "..." if len(dataset_ctx['description']) > 150 else dataset_ctx['description']
+                    prompt_parts.append(f"Description: {desc}")
                 
                 if dataset_ctx.get('schema_info'):
-                    prompt_parts.append(f"Schema Information: {dataset_ctx['schema_info']}")
+                    # Truncate schema info
+                    schema = dataset_ctx['schema_info'][:200] + "..." if len(dataset_ctx['schema_info']) > 200 else dataset_ctx['schema_info']
+                    prompt_parts.append(f"Schema: {schema}")
                 
                 if dataset_ctx.get('data_sample'):
                     sample = dataset_ctx['data_sample']
-                    prompt_parts.append(f"Sample Data ({sample.get('note', 'sample')}):")
                     if sample.get('columns'):
-                        prompt_parts.append(f"Columns: {', '.join(sample['columns'])}")
+                        cols = sample['columns'][:5]  # Even fewer columns for datasets
+                        prompt_parts.append(f"Columns: {', '.join(cols)}")
                     if sample.get('data'):
-                        prompt_parts.append("Sample Rows:")
-                        for j, row in enumerate(sample['data'][:3]):  # Limit to 3 rows for local models
+                        prompt_parts.append("Sample:")
+                        for j, row in enumerate(sample['data'][:2]):  # Only 2 rows
                             if isinstance(row, dict):
-                                row_str = ", ".join([f"{k}: {v}" for k, v in list(row.items())[:5]])
-                                prompt_parts.append(f"  Row {j+1}: {row_str}")
+                                # Show only first 3 fields per row
+                                row_items = list(row.items())[:3]
+                                row_str = ", ".join([f"{k}: {v}" for k, v in row_items])
+                                prompt_parts.append(f"  {row_str}")
                             else:
-                                prompt_parts.append(f"  Row {j+1}: {row}")
+                                prompt_parts.append(f"  {row}")
                 
                 prompt_parts.append("")
         else:
             prompt_parts.append("=== NO SPECIFIC DATA CONTEXT ===")
-            prompt_parts.append("The user is asking a general question without selecting specific data items.")
+            prompt_parts.append("General question without selected data items.")
             prompt_parts.append("")
         
-        # Clear instruction for response
-        prompt_parts.append("=== INSTRUCTIONS ===")
-        prompt_parts.append("Based on the data context provided above, please:")
-        prompt_parts.append("1. Analyze the relevant data items")
-        prompt_parts.append("2. Answer the user's question accurately and helpfully")
-        prompt_parts.append("3. Reference specific data points when relevant")
-        prompt_parts.append("4. If you need clarification, ask specific questions")
+        # Put the user's question at the END for Gemma3
+        prompt_parts.append("=== USER QUESTION ===")
+        prompt_parts.append(context['user_question'])
         prompt_parts.append("")
-        prompt_parts.append("Response:")
+        prompt_parts.append("Please provide a helpful and accurate answer based on the data context above:")
         
         return '\n'.join(prompt_parts)
     
