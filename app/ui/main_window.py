@@ -648,7 +648,8 @@ class MainWindow(QMainWindow):
         
     def rebuild_vector_database(self):
         """Rebuild the vector search database"""
-        from PyQt6.QtWidgets import QMessageBox
+        from PyQt6.QtWidgets import QMessageBox, QProgressDialog
+        from PyQt6.QtCore import QThread, pyqtSignal
         
         # First check if there's an existing database
         try:
@@ -682,46 +683,191 @@ class MainWindow(QMainWindow):
             reply = QMessageBox.StandardButton.Yes
         
         if reply == QMessageBox.StandardButton.Yes:
-            # Access the search results widget and trigger rebuild
-            if hasattr(self.search_results, 'vector_engine'):
-                try:
-                    # Get watched directories for rebuilding
-                    watched_dirs = self.config_manager.get("file_management.watched_directories", [])
-                    if watched_dirs:
-                        # Start rebuild process
-                        self.status_bar.showMessage("Rebuilding vector database...")
-                        
-                        # Use the vector search engine to rebuild
-                        from utils.vector_search import VectorSearchEngine
-                        vector_engine = VectorSearchEngine(self.config_manager)
-                        results = vector_engine.rebuild_index(watched_dirs)
-                        
-                        # Show results
-                        indexed_files = results.get('indexed_files', 0)
-                        total_files = results.get('total_files', 0)
-                        
-                        QMessageBox.information(
-                            self,
-                            "Rebuild Complete",
-                            f"Vector database rebuilt successfully!\n\n"
-                            f"Indexed {indexed_files} out of {total_files} files."
-                        )
-                        
-                        self.status_bar.showMessage(f"Vector database rebuilt: {indexed_files}/{total_files} files indexed")
-                    else:
-                        QMessageBox.warning(
-                            self,
-                            "No Data Sources",
-                            "No watched directories found.\n\n"
-                            "Please add some directories in the Files tab first."
-                        )
-                except Exception as e:
+            try:
+                # Get all data sources for rebuilding
+                watched_dirs = self.config_manager.get("file_management.watched_directories", [])
+                
+                # Also include any datasets that should be indexed
+                datasets = self.dataset_browser.get_selected_datasets() if hasattr(self, 'dataset_browser') else []
+                
+                if not watched_dirs and not datasets:
+                    QMessageBox.warning(
+                        self,
+                        "No Data Sources",
+                        "No watched directories or datasets found.\n\n"
+                        "Please add some directories in the Files tab or datasets in the Datasets tab first."
+                    )
+                    return
+                
+                # Create progress dialog
+                progress = QProgressDialog("Rebuilding vector database...", "Cancel", 0, 100, self)
+                progress.setWindowTitle("Vector Database Rebuild")
+                progress.setModal(True)
+                progress.show()
+                
+                # Create worker thread for rebuild
+                class RebuildWorker(QThread):
+                    progress_updated = pyqtSignal(int, str)
+                    rebuild_finished = pyqtSignal(dict)
+                    rebuild_error = pyqtSignal(str)
+                    
+                    def __init__(self, config_manager, watched_dirs, datasets):
+                        super().__init__()
+                        self.config_manager = config_manager
+                        self.watched_dirs = watched_dirs
+                        self.datasets = datasets
+                    
+                    def run(self):
+                        try:
+                            from utils.vector_search import VectorSearchEngine
+                            
+                            self.progress_updated.emit(10, "Initializing vector search engine...")
+                            vector_engine = VectorSearchEngine(self.config_manager)
+                            
+                            self.progress_updated.emit(20, "Clearing existing index...")
+                            vector_engine.clear_index()
+                            
+                            # Rebuild from directories
+                            total_results = {
+                                'total_files': 0,
+                                'indexed_files': 0,
+                                'failed_files': 0,
+                                'skipped_files': 0,
+                                'errors': []
+                            }
+                            
+                            if self.watched_dirs:
+                                self.progress_updated.emit(30, "Indexing watched directories...")
+                                for i, directory in enumerate(self.watched_dirs):
+                                    if not Path(directory).exists():
+                                        total_results['errors'].append(f"Directory not found: {directory}")
+                                        continue
+                                    
+                                    progress_val = 30 + (40 * (i + 1) // len(self.watched_dirs))
+                                    self.progress_updated.emit(progress_val, f"Indexing directory: {Path(directory).name}")
+                                    
+                                    results = vector_engine.index_directory(directory)
+                                    
+                                    total_results['total_files'] += results['total_files']
+                                    total_results['indexed_files'] += results['indexed_files']
+                                    total_results['failed_files'] += results['failed_files']
+                                    total_results['skipped_files'] += results['skipped_files']
+                                    total_results['errors'].extend(results['errors'])
+                            
+                            # Index datasets as virtual documents
+                            if self.datasets:
+                                self.progress_updated.emit(70, "Indexing datasets...")
+                                for i, dataset in enumerate(self.datasets):
+                                    progress_val = 70 + (20 * (i + 1) // len(self.datasets))
+                                    self.progress_updated.emit(progress_val, f"Indexing dataset: {dataset.get('name', 'Unknown')}")
+                                    
+                                    # Create virtual document for dataset
+                                    dataset_id = f"dataset://{dataset['name']}"
+                                    success = vector_engine.index_document(
+                                        dataset_id,
+                                        fileset_name=dataset['name'],
+                                        fileset_description=dataset.get('description', ''),
+                                        tags=dataset.get('tags', []),
+                                        user_description=f"""
+Dataset: {dataset['name']}
+Type: {dataset.get('type', 'Unknown')}
+Description: {dataset.get('description', '')}
+Owner: {dataset.get('owner', 'Unknown')}
+Source: {dataset.get('source', '')}
+Access Level: {dataset.get('access_level', 'Unknown')}
+Row Count: {dataset.get('row_count', 'Unknown')}
+Schema: {dataset.get('schema_info', 'Unknown')}
+Connection: {dataset.get('connection_name', 'Unknown')}
+                                        """.strip()
+                                    )
+                                    
+                                    if success:
+                                        total_results['indexed_files'] += 1
+                                    else:
+                                        total_results['failed_files'] += 1
+                            
+                            self.progress_updated.emit(90, "Finalizing index...")
+                            
+                            # Remove any duplicates that might have been created
+                            duplicate_results = vector_engine.remove_duplicate_documents()
+                            if duplicate_results['removed'] > 0:
+                                total_results['errors'].append(f"Removed {duplicate_results['removed']} duplicate documents")
+                            
+                            self.progress_updated.emit(100, "Rebuild complete!")
+                            self.rebuild_finished.emit(total_results)
+                            
+                        except Exception as e:
+                            self.rebuild_error.emit(str(e))
+                
+                # Create and start worker
+                self.rebuild_worker = RebuildWorker(self.config_manager, watched_dirs, datasets)
+                
+                def update_progress(value, message):
+                    progress.setValue(value)
+                    progress.setLabelText(message)
+                
+                def on_rebuild_finished(results):
+                    progress.close()
+                    
+                    indexed_files = results.get('indexed_files', 0)
+                    total_files = results.get('total_files', 0)
+                    failed_files = results.get('failed_files', 0)
+                    errors = results.get('errors', [])
+                    
+                    message = f"Vector database rebuilt successfully!\n\n"
+                    message += f"Indexed: {indexed_files} files\n"
+                    message += f"Total processed: {total_files} files\n"
+                    
+                    if failed_files > 0:
+                        message += f"Failed: {failed_files} files\n"
+                    
+                    if errors:
+                        message += f"\nErrors encountered: {len(errors)}\n"
+                        if len(errors) <= 5:
+                            message += "\n".join(errors[:5])
+                        else:
+                            message += "\n".join(errors[:3]) + f"\n... and {len(errors) - 3} more"
+                    
+                    QMessageBox.information(self, "Rebuild Complete", message)
+                    self.status_bar.showMessage(f"Vector database rebuilt: {indexed_files}/{total_files} files indexed")
+                    
+                    # Refresh the search results to reflect new index
+                    if hasattr(self.search_results, 'clear_results'):
+                        self.search_results.clear_results()
+                        self.search_results.show_welcome_message()
+                
+                def on_rebuild_error(error_msg):
+                    progress.close()
                     QMessageBox.critical(
                         self,
                         "Rebuild Failed",
-                        f"Failed to rebuild vector database:\n\n{str(e)}"
+                        f"Failed to rebuild vector database:\n\n{error_msg}"
                     )
                     self.status_bar.showMessage("Vector database rebuild failed")
+                
+                def on_progress_canceled():
+                    if hasattr(self, 'rebuild_worker') and self.rebuild_worker.isRunning():
+                        self.rebuild_worker.terminate()
+                        self.rebuild_worker.wait()
+                    self.status_bar.showMessage("Vector database rebuild canceled")
+                
+                # Connect signals
+                self.rebuild_worker.progress_updated.connect(update_progress)
+                self.rebuild_worker.rebuild_finished.connect(on_rebuild_finished)
+                self.rebuild_worker.rebuild_error.connect(on_rebuild_error)
+                progress.canceled.connect(on_progress_canceled)
+                
+                # Start the rebuild
+                self.status_bar.showMessage("Starting vector database rebuild...")
+                self.rebuild_worker.start()
+                
+            except Exception as e:
+                QMessageBox.critical(
+                    self,
+                    "Rebuild Failed",
+                    f"Failed to start vector database rebuild:\n\n{str(e)}"
+                )
+                self.status_bar.showMessage("Vector database rebuild failed to start")
     
     def show_change_password(self):
         """Show change password dialog"""

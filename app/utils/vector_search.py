@@ -1576,8 +1576,10 @@ class VectorSearchEngine:
             return []
             
     def clear_index(self):
-        """Clear all indexed documents and embeddings"""
+        """Clear all indexed documents and embeddings completely"""
         try:
+            logger.info("Clearing vector search index...")
+            
             # Clear database
             db_path_str = str(self.vector_db_path.resolve())
             if not Path(db_path_str).exists():
@@ -1589,27 +1591,46 @@ class VectorSearchEngine:
             conn = sqlite3.connect(db_path_str)
             cursor = conn.cursor()
             
+            # Get count of items before clearing
+            cursor.execute("SELECT COUNT(*) FROM documents")
+            doc_count = cursor.fetchone()[0]
+            cursor.execute("SELECT COUNT(*) FROM chunks")
+            chunk_count = cursor.fetchone()[0]
+            
+            logger.info(f"Clearing {doc_count} documents and {chunk_count} chunks from database")
+            
             # Clear in proper order to respect foreign key constraints
+            cursor.execute("DELETE FROM search_history")
             cursor.execute("DELETE FROM chunks")
             cursor.execute("DELETE FROM documents")
             cursor.execute("DELETE FROM filesets")
-            cursor.execute("DELETE FROM search_history")
+            
+            # Reset auto-increment counters
+            cursor.execute("DELETE FROM sqlite_sequence WHERE name IN ('documents', 'chunks', 'filesets', 'search_history')")
             
             conn.commit()
             conn.close()
             
             # Clear embedding files
+            embedding_files_removed = 0
             if self.embeddings_path.exists():
                 for embedding_file in self.embeddings_path.glob("*.npy"):
                     try:
                         embedding_file.unlink()
+                        embedding_files_removed += 1
                     except Exception as e:
                         logger.warning(f"Failed to delete embedding file {embedding_file}: {e}")
-                        
-            logger.info("Vector search index cleared completely")
+            
+            logger.info(f"Vector search index cleared completely: {doc_count} documents, {chunk_count} chunks, {embedding_files_removed} embedding files removed")
+            
+            # Clear any cached data
+            self.documents = []
+            self.embeddings_cache = {}
             
         except Exception as e:
             logger.error(f"Error clearing index: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
             raise
             
     def remove_duplicate_documents(self) -> Dict[str, Any]:
@@ -1742,10 +1763,15 @@ class VectorSearchEngine:
             return {'removed': 0, 'errors': [str(e)]}
             
     def rebuild_index(self, directories: List[str]) -> Dict[str, Any]:
-        """Rebuild the entire vector search index"""
+        """Rebuild the entire vector search index from directories"""
         try:
-            # Clear existing index
+            logger.info("Starting vector search index rebuild...")
+            
+            # Clear existing index completely
             self.clear_index()
+            
+            # Re-initialize database to ensure clean state
+            self._init_database()
             
             # Index all directories
             total_results = {
@@ -1753,27 +1779,72 @@ class VectorSearchEngine:
                 'indexed_files': 0,
                 'failed_files': 0,
                 'skipped_files': 0,
-                'errors': []
+                'errors': [],
+                'directories_processed': 0,
+                'directories_total': len(directories)
             }
             
-            for directory in directories:
+            for i, directory in enumerate(directories):
+                logger.info(f"Processing directory {i+1}/{len(directories)}: {directory}")
+                
                 if not Path(directory).exists():
-                    total_results['errors'].append(f"Directory not found: {directory}")
+                    error_msg = f"Directory not found: {directory}"
+                    total_results['errors'].append(error_msg)
+                    logger.warning(error_msg)
                     continue
+                
+                try:
+                    # Generate a meaningful fileset name for the directory
+                    dir_path = Path(directory)
+                    fileset_name = f"Directory_{dir_path.name}"
+                    fileset_description = f"Files from directory: {directory}"
                     
-                results = self.index_directory(directory)
-                
-                total_results['total_files'] += results['total_files']
-                total_results['indexed_files'] += results['indexed_files']
-                total_results['failed_files'] += results['failed_files']
-                total_results['skipped_files'] += results['skipped_files']
-                total_results['errors'].extend(results['errors'])
-                
-            logger.info(f"Index rebuild complete: {total_results['indexed_files']}/{total_results['total_files']} files indexed")
+                    results = self.index_directory(
+                        directory,
+                        fileset_name=fileset_name,
+                        fileset_description=fileset_description,
+                        tags=['directory', 'auto-indexed'],
+                        max_files=1000  # Limit per directory to prevent overwhelming
+                    )
+                    
+                    total_results['total_files'] += results['total_files']
+                    total_results['indexed_files'] += results['indexed_files']
+                    total_results['failed_files'] += results['failed_files']
+                    total_results['skipped_files'] += results['skipped_files']
+                    total_results['errors'].extend(results['errors'])
+                    total_results['directories_processed'] += 1
+                    
+                    logger.info(f"Directory {directory}: {results['indexed_files']}/{results['total_files']} files indexed")
+                    
+                except Exception as e:
+                    error_msg = f"Error indexing directory {directory}: {str(e)}"
+                    total_results['errors'].append(error_msg)
+                    total_results['failed_files'] += 1
+                    logger.error(error_msg)
+            
+            # Clean up any duplicates that might have been created
+            try:
+                duplicate_results = self.remove_duplicate_documents()
+                if duplicate_results['removed'] > 0:
+                    logger.info(f"Removed {duplicate_results['removed']} duplicate documents during rebuild")
+                    total_results['errors'].append(f"Cleaned up {duplicate_results['removed']} duplicate documents")
+            except Exception as e:
+                logger.warning(f"Error removing duplicates during rebuild: {e}")
+            
+            # Get final stats
+            final_stats = self.get_index_stats()
+            total_results['final_document_count'] = final_stats.get('document_count', 0)
+            total_results['final_chunk_count'] = final_stats.get('chunk_count', 0)
+            
+            logger.info(f"Index rebuild complete: {total_results['indexed_files']}/{total_results['total_files']} files indexed across {total_results['directories_processed']} directories")
+            logger.info(f"Final index contains {total_results['final_document_count']} documents with {total_results['final_chunk_count']} chunks")
+            
             return total_results
             
         except Exception as e:
             logger.error(f"Error rebuilding index: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
             raise
             
     def get_index_stats(self) -> Dict[str, Any]:
