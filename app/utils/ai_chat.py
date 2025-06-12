@@ -619,8 +619,105 @@ class AIService:
         return self._build_generic_prompt(context, "GPT")
     
     def _build_local_prompt(self, context: Dict[str, Any]) -> str:
-        """Build prompt for local model"""
-        return self._build_generic_prompt(context, "Assistant")
+        """Build prompt for local model with enhanced context formatting"""
+        return self._build_enhanced_local_prompt(context)
+    
+    def _build_enhanced_local_prompt(self, context: Dict[str, Any]) -> str:
+        """Build enhanced prompt specifically optimized for local models like Gemma"""
+        prompt_parts = []
+        
+        # Clear system instruction for local models
+        prompt_parts.append("You are a helpful data analyst assistant. Analyze the provided data context and answer the user's question accurately.")
+        prompt_parts.append("")
+        
+        # Emphasize the user's question prominently
+        prompt_parts.append("=== USER QUESTION ===")
+        prompt_parts.append(context['user_question'])
+        prompt_parts.append("")
+        
+        # Add context information with clear structure
+        if context['selected_items_count'] > 0:
+            prompt_parts.append("=== DATA CONTEXT ===")
+            prompt_parts.append(f"The user has selected {context['selected_items_count']} data items for analysis:")
+            prompt_parts.append("")
+            
+            # Process files with enhanced formatting
+            for i, file_ctx in enumerate(context.get('files', []), 1):
+                prompt_parts.append(f"--- FILE {i}: {file_ctx['name']} ---")
+                prompt_parts.append(f"File Type: {file_ctx['type']}")
+                prompt_parts.append(f"Location: {file_ctx.get('path', 'Unknown')}")
+                
+                if file_ctx.get('summary'):
+                    prompt_parts.append(f"Summary: {file_ctx['summary']}")
+                
+                if file_ctx.get('schema'):
+                    schema = file_ctx['schema']
+                    if isinstance(schema, dict):
+                        if 'columns' in schema:
+                            prompt_parts.append(f"Columns: {', '.join(schema['columns'])}")
+                        if 'sample_data' in schema and schema['sample_data']:
+                            prompt_parts.append("Sample Data:")
+                            for j, row in enumerate(schema['sample_data'][:3]):
+                                prompt_parts.append(f"  Row {j+1}: {row}")
+                    else:
+                        prompt_parts.append(f"Schema: {schema}")
+                
+                if file_ctx.get('content_preview'):
+                    content = file_ctx['content_preview'][:800]  # Limit for local models
+                    prompt_parts.append(f"Content Preview:")
+                    prompt_parts.append(content)
+                
+                prompt_parts.append("")
+            
+            # Process datasets with enhanced formatting
+            for i, dataset_ctx in enumerate(context.get('datasets', []), 1):
+                prompt_parts.append(f"--- DATASET {i}: {dataset_ctx['name']} ---")
+                prompt_parts.append(f"Dataset Type: {dataset_ctx['type']}")
+                
+                if dataset_ctx.get('description'):
+                    prompt_parts.append(f"Description: {dataset_ctx['description']}")
+                
+                if dataset_ctx.get('tags'):
+                    tags = dataset_ctx['tags']
+                    if isinstance(tags, list):
+                        prompt_parts.append(f"Tags: {', '.join(tags)}")
+                    else:
+                        prompt_parts.append(f"Tags: {tags}")
+                
+                if dataset_ctx.get('schema_info'):
+                    prompt_parts.append(f"Schema Information: {dataset_ctx['schema_info']}")
+                
+                if dataset_ctx.get('data_sample'):
+                    sample = dataset_ctx['data_sample']
+                    prompt_parts.append(f"Sample Data ({sample.get('note', 'sample')}):")
+                    if sample.get('columns'):
+                        prompt_parts.append(f"Columns: {', '.join(sample['columns'])}")
+                    if sample.get('data'):
+                        prompt_parts.append("Sample Rows:")
+                        for j, row in enumerate(sample['data'][:3]):  # Limit to 3 rows for local models
+                            if isinstance(row, dict):
+                                row_str = ", ".join([f"{k}: {v}" for k, v in list(row.items())[:5]])
+                                prompt_parts.append(f"  Row {j+1}: {row_str}")
+                            else:
+                                prompt_parts.append(f"  Row {j+1}: {row}")
+                
+                prompt_parts.append("")
+        else:
+            prompt_parts.append("=== NO SPECIFIC DATA CONTEXT ===")
+            prompt_parts.append("The user is asking a general question without selecting specific data items.")
+            prompt_parts.append("")
+        
+        # Clear instruction for response
+        prompt_parts.append("=== INSTRUCTIONS ===")
+        prompt_parts.append("Based on the data context provided above, please:")
+        prompt_parts.append("1. Analyze the relevant data items")
+        prompt_parts.append("2. Answer the user's question accurately and helpfully")
+        prompt_parts.append("3. Reference specific data points when relevant")
+        prompt_parts.append("4. If you need clarification, ask specific questions")
+        prompt_parts.append("")
+        prompt_parts.append("Response:")
+        
+        return '\n'.join(prompt_parts)
     
     def _build_generic_prompt(self, context: Dict[str, Any], assistant_name: str) -> str:
         """Build generic prompt with context"""
